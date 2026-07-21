@@ -1,0 +1,141 @@
+[project]
+name = "viable-agents"
+version = "0.0.0"
+description = "A multi-agent LLM orchestrator structured as Stafford Beer's Viable System Model, with an algedonic escalation bypass and a POSIWID auditor."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+authors = [{ name = "Samanyu Malik" }]
+
+# Phase 0 ships only what Phase 0 code imports. SQLAlchemy, asyncpg, Alembic,
+# Langfuse, Anthropic and the CLI framework arrive in Phase 1 alongside the
+# modules that import them. Keeping the Phase 0 lock small also keeps the
+# "kernel imports nothing heavy" guard meaningful from the first commit.
+dependencies = [
+    "pydantic>=2.13.4,<3",
+    "pydantic-settings>=2.14.2,<3",
+    "pyyaml>=6.0.3,<7",
+]
+
+[project.scripts]
+viable-agents = "viable_agents.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.27,<0.12.0"]
+build-backend = "uv_build"
+
+# PEP 735 dependency groups, not [project.optional-dependencies]: groups are
+# local-only and never published, extras ship to consumers. `dev` is synced by
+# default, so plain `uv sync` is enough.
+# Use uv's own CPython, never a system or Conda interpreter. This machine's
+# `python3` is Homebrew 3.14 and its `python3.12` is Anaconda 3.12.7; building
+# the venv on the Anaconda base produced an editable install whose .pth was not
+# applied, so imports of the project's own package failed intermittently.
+# Pinning to the managed interpreter removes a whole class of "works on my
+# machine" from a project whose central claim is that runs reproduce.
+[tool.uv]
+python-preference = "only-managed"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.22,<0.16",
+    "mypy>=2.3.0,<3",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.4.0,<2",
+    "pytest-cov>=7.1.0,<8",
+    "types-pyyaml>=6.0.12,<7",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# TC (flake8-type-checking) is deliberately absent. Its rules move
+# annotation-only imports into `if TYPE_CHECKING:` blocks, and Pydantic resolves
+# annotations at runtime: the module still imports cleanly and the FIRST
+# VALIDATION raises PydanticUserError. `ruff check --fix --unsafe-fixes` applies
+# it for you. Under mypy strict, TC buys nothing worth that failure mode.
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "T20", "SIM", "TID",
+    "PTH", "RUF", "ASYNC", "S", "PT", "ANN", "LOG", "G", "PIE", "RET", "ARG",
+    "TRY", "PL", "EM", "ISC", "INP", "SLF", "PGH", "FURB",
+]
+ignore = [
+    "ISC001",   # conflicts with the formatter
+    "TRY003",   # long messages outside the exception class; fine for domain errors
+    "PLR0913",  # agent constructors legitimately take many injected collaborators
+    "FURB157",  # rewrites Decimal("2") to Decimal(2); money literals stay strings
+    "ANN401",   # **fields: Any is inherent to the Tracer/Span protocols
+]
+
+# ASYNC and DTZ are load-bearing here rather than stylistic: ASYNC catches
+# blocking calls inside the asyncio kernel, and DTZ forces tz-aware datetimes,
+# which the Phase 6 escalation timers depend on.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ANN", "PLR2004", "SLF001", "INP001"]
+"migrations/**" = ["INP001", "ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["viable_agents"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+# CLAUDE.md hard rule 2 wants --strict on the kernel and standard mypy
+# elsewhere. Writing `strict = true` inside the override does NOT do that: mypy
+# fires the global set_strict_flags() callback and strict-checks the whole repo
+# (reproduced on 2.3.0). The 12 flags below are the per-module-legal members of
+# the strict set. `warn_redundant_casts` is not among them and is already
+# default-on. tests/unit/test_mypy_scoping.py fails if this ever silently
+# regresses in either direction.
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["viable_agents.kernel", "viable_agents.kernel.*"]
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+implicit_reexport = false
+strict_equality = true
+extra_checks = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+# Both loop-scope keys are required. Setting only the fixture scope leaves the
+# test on a different event loop, and a session-scoped async fixture consumed by
+# a function-scoped one raises ScopeMismatch. That failure is invisible until a
+# database actually exists, which is exactly when Phase 1's "rows in Postgres"
+# criterion gets verified.
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "db: requires a Postgres instance",
+    "live: hits a real external API; deselected in CI",
+]
+
+[tool.coverage.run]
+source = ["src/viable_agents"]
+branch = true

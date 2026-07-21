@@ -1,0 +1,23 @@
+# Local stack. Postgres only, on purpose: Langfuse runs in the cloud (a
+# self-hosted Langfuse needs six services and a documented 16 GiB floor, which
+# works against the Phase 10 goal of "a stranger with Docker reproduces this").
+services:
+  postgres:
+    image: postgres:16
+    container_name: viable-agents-postgres
+    environment:
+      POSTGRES_USER: viable
+      POSTGRES_PASSWORD: viable
+      POSTGRES_DB: viable_agents
+    ports:
+      - "5433:5432"
+    volumes:
+      - viable-agents-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U viable -d viable_agents"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  viable-agents-pgdata:

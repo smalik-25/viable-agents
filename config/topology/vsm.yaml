@@ -1,0 +1,58 @@
+# The routing matrix. Who may send what, to whom, on which channel.
+#
+# This file is the research object. It is data, never code branches, so the
+# Phase 9 ablation can rewire the fleet without touching Python (CLAUDE.md hard
+# rule 1). `config/topology/flat.yaml` is the same schema describing a single
+# dispatcher with four channels disabled.
+#
+# STUB. Phase 1 fills in the full matrix and the loader that compiles it.
+#
+# Two design commitments to preserve when filling it in:
+#
+# 1. The matrix is TOTAL. Every (sender_role, recipient_role, channel) cell gets
+#    an explicit allow or deny with a rule id, and nothing falls through to a
+#    default. A sparse matrix with implicit deny cannot be ablated honestly,
+#    because the flat arm would then differ from full VSM by which denies were
+#    absent, and an absence is not inspectable in a diff.
+#
+# 2. Authorization is scoped by INTENT, not just channel. "An S1 must not send on
+#    COMMAND" is false as a blanket rule: an S1 reporting on the resources it was
+#    given is Beer's V2 resource bargain closing its loop, not an S1 issuing
+#    orders. The rule is that S1 must not send COMMAND with intent intervention,
+#    allocation or policy.
+#
+# Sketch of the intended shape:
+#
+# version: 1
+# roles: [s1, s2, s3, s3star, s4, s5, human, environment]
+# channels:
+#   command:      {enabled: true, queue: {policy: block_with_timeout, maxsize: 256}}
+#   coordination: {enabled: true, queue: {policy: block_with_timeout, maxsize: 256}}
+#   audit:        {enabled: true, queue: {policy: block_with_timeout, maxsize: 64}}
+#   algedonic:    {enabled: true, queue: {policy: never_drop, maxsize: null}}
+#   environment:  {enabled: true, queue: {policy: block_with_timeout, maxsize: 512}}
+# intents:
+#   command:      [policy, allocation, intervention, accountability, pause, resume]
+#   coordination: [claim, release, arbitrate, lateral, homeostat]
+#   audit:        [sample_request, finding, charter_diff]
+#   algedonic:    [pain, pleasure, ack, resolve]
+#   environment:  [observation, forecast]
+# rules:
+#   - {id: cmd-s5-to-s3, sender: s5, recipient: s3, channel: command,
+#      intents: [policy, allocation], effect: allow}
+#   - {id: cmd-s3-to-s1, sender: s3, recipient: s1, channel: command,
+#      intents: [allocation, intervention, pause, resume], effect: allow}
+#   - {id: cmd-s1-to-s3-accountability, sender: s1, recipient: s3, channel: command,
+#      intents: [accountability], effect: allow}
+#   - {id: cmd-s5-to-s1-denied, sender: s5, recipient: s1, channel: command,
+#      effect: deny,
+#      because: "S5 does not reach into operations. The metasystem sets policy to
+#                S3 and S4; reaching past them is the pathology Beer warns about
+#                and the thing Phase 5's 'S5 never does object-level work' exit
+#                criterion asserts."}
+#   - {id: alg-any-to-metasystem, sender: "*", recipient: metasystem, channel: algedonic,
+#      effect: allow,
+#      because: "Anything may raise pain. The recipient is resolved as the
+#                metasystem of the sender's enclosing recursion rather than
+#                hardcoded to S5, so a future recursive S1 escalates one level up
+#                instead of skipping to the top."}

@@ -1,0 +1,13 @@
+# Public GitHub repositories the live adapter watches.
+#
+# STUB. Phase 2 fills this in. Selection criteria: public, permissive license,
+# high workflow-run volume, and visibly flaky tests, because a watchlist with
+# green CI gives the triage agents nothing to do.
+#
+# The adapter is read-only (CLAUDE.md hard rule 5). Nothing here grants write
+# access and the token must carry no write scope.
+
+poll_interval_seconds: 300
+max_runs_per_repo_per_poll: 25
+
+repos: []
