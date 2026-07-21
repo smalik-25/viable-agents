@@ -1,0 +1,84 @@
+# Model tiers. Ashby's Law as a routing table: variety in the model matches
+# variety in the decision. S1 classifies against a fixed taxonomy and gets a
+# cheap fast model; S3 through S5 arbitrate and get a stronger one; S2 attenuates
+# variety in code and gets no model at all.
+#
+# Model IDs appear here and nowhere else in the repo (CLAUDE.md hard rule 3).
+# Phase 1 fills in the loader, the per-tier request builder and the cost
+# arithmetic. Prices verified against the Anthropic pricing page on 2026-07-20.
+
+# Pricing is EFFECTIVE-DATED, not a single number. Sonnet 5's introductory rate
+# expires 2026-08-31, and a stale price silently corrupts the one column the
+# Phase 9 ablation table is judged on. `price_for(tier, at)` raises when no row
+# covers the date rather than reusing the last one, and a test pins both sides of
+# the rollover.
+
+tiers:
+  haiku:
+    model_id: claude-haiku-4-5
+    max_context_tokens: 200000
+    max_output_tokens: 64000
+    default_max_tokens: 4096
+    # Capability flags, not decoration: the tiers are not request-compatible.
+    # Haiku 4.5 takes budget_tokens thinking and returns 400 on `effort`.
+    thinking_mode: budget_tokens
+    supports_effort: false
+    supports_sampling_params: true
+    pricing:
+      - effective_from: "2026-01-01"
+        input_per_mtok: "1.00"
+        output_per_mtok: "5.00"
+        cache_write_5m_per_mtok: "1.25"
+        cache_write_1h_per_mtok: "2.00"
+        cache_read_per_mtok: "0.10"
+
+  sonnet:
+    model_id: claude-sonnet-5
+    max_context_tokens: 1000000
+    max_output_tokens: 128000
+    default_max_tokens: 8192
+    # Sonnet 5 requires adaptive thinking and returns 400 on any non-default
+    # temperature, top_p or top_k. Thinking tokens bill at the OUTPUT rate,
+    # which is why the metasystem agents dominate run cost despite making far
+    # fewer calls than S1.
+    thinking_mode: adaptive
+    supports_effort: true
+    supports_sampling_params: false
+    pricing:
+      - effective_from: "2026-01-01"
+        input_per_mtok: "2.00"       # introductory
+        output_per_mtok: "10.00"
+        cache_write_5m_per_mtok: "2.50"
+        cache_write_1h_per_mtok: "4.00"
+        cache_read_per_mtok: "0.20"
+      - effective_from: "2026-09-01"
+        input_per_mtok: "3.00"       # standard
+        output_per_mtok: "15.00"
+        cache_write_5m_per_mtok: "3.75"
+        cache_write_1h_per_mtok: "6.00"
+        cache_read_per_mtok: "0.30"
+
+# Which tier each VSM role draws from. This mapping is the Ashby claim made
+# concrete, and the Phase 9 ablation varies it deliberately: the flat arm runs
+# once all-Haiku and once with a Sonnet dispatcher, so a reader can separate the
+# topology effect from the tiering effect.
+role_tiers:
+  s1: haiku
+  s2: none        # pure code. Zero dollars, and that is a finding, not a gap.
+  s3: sonnet
+  s3star: sonnet
+  s4: sonnet
+  s5: sonnet
+  dispatcher: haiku
+  worker: haiku
+
+# Development and iteration run on this override, which maps every role to the
+# cheap tier. Only the headline sweep pays for Sonnet. Selected by profile, so
+# switching costs nothing in code.
+overlays:
+  cheap:
+    role_tiers:
+      s3: haiku
+      s3star: haiku
+      s4: haiku
+      s5: haiku

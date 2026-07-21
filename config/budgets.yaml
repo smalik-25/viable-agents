@@ -1,0 +1,40 @@
+# Budgets. S3 allocates against these; the algedonic cost-runaway detector fires
+# against the burn rate derived from them.
+#
+# STUB. Phase 4 activates the allocator, Phase 6 the detector.
+#
+# These numbers are chosen so the FEATURES are demonstrable. A per-run budget far
+# above the measured cost means S3 rubber-stamps and the cost detector never
+# fires, and both become decorative. A budget far below it means every run is
+# starved and the ablation measures starvation rather than topology.
+#
+# Note the per-agent caps deliberately sum to MORE than the pool. An allocator
+# with slack is not an allocator: over-subscription is what forces S3 to
+# arbitrate rather than approve everything.
+
+default_run_budget_usd: "0.60"
+
+per_agent_caps_usd:
+  s1: "0.24"
+  s3: "0.14"
+  s5: "0.11"
+  s3star: "0.11"
+  s4: "0.07"
+  # sums to 0.67 against a 0.60 pool
+
+# The named Phase 4 graceful-degradation scenario: S3 must shed low-priority
+# work rather than crash.
+starved_run_budget_usd: "0.24"
+
+# Phase 6 cost-runaway detector. A RATE threshold over a sliding window, not a
+# total-spend threshold: S3* audit passes are lumpy and a naive total-spend
+# trigger would fire on the audit and pollute the false-positive count.
+cost_runaway:
+  k: 2.5              # multiple of the linear burn line
+  window_events: 20
+  warmup_events: 15
+
+# Hard ceilings. The project cap is enforced by the metered client, which refuses
+# a call that would cross it, so a runaway loop cannot quietly spend a month's
+# budget overnight.
+project_ceiling_usd: "50.00"
