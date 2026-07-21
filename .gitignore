@@ -1,0 +1,35 @@
+# --- Project-private planning docs (MUST stay untracked) ---
+CLAUDE.md
+PLAN.md
+
+# --- Secrets / env ---
+.env
+.env.*
+!.env.example
+
+# --- Python / uv ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Local run artifacts (committed eval reports live in evals/reports/) ---
+runs/
+.cache/
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
+
+# --- Editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.log
