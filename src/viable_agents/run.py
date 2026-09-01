@@ -66,19 +66,24 @@ from viable_agents.systems.s1 import (
     DepAgent,
     DepDraft,
     FlakeAgent,
+    S1Worker,
     TriageDecision,
     scripted_dep_responder,
     scripted_triage_responder,
 )
+from viable_agents.systems.s2 import Coordinator
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 FLEET = ("fleet",)
 ENV_ADDR = AgentAddress(path=("fleet", "env_0"), role=Role.ENVIRONMENT)
 
-_AGENT_TYPES: dict[str, type[BuildTriageAgent | FlakeAgent | DepAgent]] = {
+FleetAgent = BuildTriageAgent | FlakeAgent | DepAgent | Coordinator
+
+_AGENT_TYPES: dict[str, type[FleetAgent]] = {
     "BuildTriageAgent": BuildTriageAgent,
     "FlakeAgent": FlakeAgent,
     "DepAgent": DepAgent,
+    "Coordinator": Coordinator,
 }
 
 _STABLE_IDLE_ROUNDS = 3
@@ -177,14 +182,14 @@ async def _open_sink(
 
 def _build_agents(
     config: Any, *, bus: Bus, clock: RealClock, tracer: Any, llm: LLMClient
-) -> tuple[list[BuildTriageAgent | FlakeAgent | DepAgent], list[AgentAddress]]:
-    s1_specs = [a for a in config.fleet.agents if a.agent_type in _AGENT_TYPES]
-    addresses = [AgentAddress(path=spec.path, role=spec.role) for spec in s1_specs]
+) -> tuple[list[FleetAgent], list[AgentAddress]]:
+    specs = [a for a in config.fleet.agents if a.agent_type in _AGENT_TYPES]
+    addresses = [AgentAddress(path=spec.path, role=spec.role) for spec in specs]
     for addr in addresses:
         bus.register(addr)
 
-    agents: list[BuildTriageAgent | FlakeAgent | DepAgent] = []
-    for spec, addr in zip(s1_specs, addresses, strict=True):
+    agents: list[FleetAgent] = []
+    for spec, addr in zip(specs, addresses, strict=True):
         cls = _AGENT_TYPES[spec.agent_type]
         tier = None if spec.model_tier == "none" else spec.model_tier
         kwargs: dict[str, Any] = {
@@ -192,8 +197,9 @@ def _build_agents(
             "bus": bus,
             "clock": clock,
             "tracer": tracer,
-            "fleet_scope": FLEET,
         }
+        if issubclass(cls, S1Worker):
+            kwargs["fleet_scope"] = FLEET
         if tier is not None:
             kwargs["llm"] = llm
             kwargs["model_tier"] = tier
@@ -293,7 +299,7 @@ async def _run(
 
 
 def _summarize(
-    agents: list[BuildTriageAgent | FlakeAgent | DepAgent],
+    agents: list[FleetAgent],
     source: CIEventSource,
     *,
     source_mode: str,

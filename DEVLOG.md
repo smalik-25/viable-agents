@@ -2,6 +2,72 @@
 
 Running log of what changed and why. Newest first.
 
+## 2026-09-01 - Phase 3: S2 coordination, the anti-oscillation test
+
+`BuildTriageAgent` now claims a `(run key, work type)` pair from `Coordinator`
+before classifying and releases it once it reports, so two instances of the
+same S1 type racing the same workflow run -- a legitimate horizontal scale-out,
+since `env_in_s1` fans a CI event out to every agent registered under the S1
+role, not to one instance -- do not both report it. `WorkClaimLedger`
+(`systems/s2/ledger.py`) is first-claim-wins, pure code, keyed by `(run key,
+work type)` so a `BuildTriageAgent` and a `FlakeAgent` on the same run never
+contend, and TTL-reclaimable so a degraded S1 does not strand a run unclaimed
+forever. No topology change: `coord_s1_s2_claim`, `coord_s2_s1_arbitrate` and
+`coord_s1_s2_release` were already reserved in `config/topology/vsm.yaml` since
+Phase 1, and `coordinator_0` was already in `config/fleet/vsm.yaml`.
+
+The claim is fire-and-forget, not a blocking round trip: an agent's inbox is a
+single FIFO queue drained one envelope per `handle()` call, so blocking mid-turn
+for a reply would stall on whatever arrives after it or corrupt delivery order.
+`S1Worker.claim()` stashes the causing envelope and returns; the `ARBITRATE`
+reply is a later, independent `handle()` call that resumes the stashed work if
+granted. This is the design's one real behavior change: `BuildTriageAgent` now
+defaults to `coordinate=True`, so its existing Phase 2 tests needed updating to
+drive the real two-hop protocol (`tests/unit/test_s1_agents.py`'s new `_process`
+helper) rather than expecting a report from a single `handle()` call.
+`coordinate=False` reproduces Phase 2's original, unmediated behavior and exists
+so the thrash test can demonstrate the failure using this exact class, not a
+stand-in. `FlakeAgent` and `DepAgent` are unchanged: the fleet has exactly one
+instance of each today, so there is no actual contention for them to damp yet;
+wiring them in later is additive, not a redesign.
+
+Per hard rule 8, `tests/unit/test_s2_coordination.py`'s first test
+(`test_two_build_triage_agents_thrash_without_coordination`) was written and
+run against `coordinate=False` before `Coordinator` existed, showing the bug:
+two accountability envelopes for one workflow run. `docs/ARCHITECTURE.md`
+already flagged the real risk with this channel's collapse -- a test built
+around client-side coordination could pass because the S1s "sorted it out
+themselves" rather than because S2 damped anything -- so every coordinated test
+routes the claim through a real `Coordinator.handle()` call and inspects its
+`decisions` directly. Exit criteria: the thrash test fails with coordination off
+and passes with it on; `test_duplicate_claim_rate_is_zero_across_a_thousand_runs`
+runs 1,000 distinct workflow runs through two competing `BuildTriageAgent`s with
+`Coordinator` wired in and asserts zero keys were ever granted to more than one
+owner. 7 new tests, plus 4 pure-code `WorkClaimLedger` tests (grant, deny,
+release, TTL reclaim, cross-work-type independence) needing no bus at all.
+
+Caught and fixed before this landed: the 1,000-run test's winning claimant
+releases its claim every iteration, and the first version of the test never
+drained that release from S2's inbox. COORDINATION's queue is bounded
+(`maxsize: 256`, `overflow: block`), so the queue saturated around iteration
+256 and every release past that blocked for `block_timeout_seconds` before
+raising `ChannelSaturatedError` -- the test just hung. `run.py`'s real pipeline
+never hits this: `Coordinator` runs as a persistent agent task that drains its
+own inbox continuously, unlike the test's manual, one-message-at-a-time
+stepping. Fixed by draining the release each iteration; confirmed the fixed
+test runs in under a second.
+
+`Coordinator` is now wired into `run.py`'s standard fleet build (`_AGENT_TYPES`,
+`_build_agents`), so `viable-agents run --source synthetic --events 500
+--verify` genuinely goes through S2 in production, not only in tests. Verified
+the numbers are unchanged from Phase 2's baseline (171 triage verdicts, 3 flake
+assessments, 41 dep summaries, 100% agreement, $0.4664 LLM cost) -- expected,
+since the default fleet has exactly one `BuildTriageAgent` and no contention;
+the coordination round trip adds latency, not a behavior change, when nothing
+is actually racing. Full suite: 591 passed against real Postgres (584 from
+Phase 2 plus 7 new), `ruff`/`ruff format`/`mypy --strict` all clean, kernel
+untouched (1,165 / 1,500 lines) since none of this needed a kernel change.
+
 ## 2026-09-01 - Phase 2 hardening: migration 0001 was silently absorbing later tables
 
 CI failed `alembic upgrade head` from an empty database with
