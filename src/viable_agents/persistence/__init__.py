@@ -8,6 +8,7 @@ from viable_agents.persistence.base import Base
 from viable_agents.persistence.models import (
     AgentRow,
     ChannelSaturationRow,
+    GitHubCacheRow,
     LLMCallRow,
     MessageRow,
     RunRow,
@@ -19,6 +20,7 @@ __all__ = [
     "AgentRow",
     "Base",
     "ChannelSaturationRow",
+    "GitHubCacheRow",
     "InMemorySink",
     "LLMCallRow",
     "MessageRow",

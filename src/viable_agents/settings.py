@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://viable:viable@localhost:5433/viable_agents"
     anthropic_api_key: str | None = None
+    # Phase 2: the read-only GitHub adapter (sources/github.py). Fine-grained,
+    # read-only scope (CLAUDE.md hard rule 5); required only for --source live.
+    github_token: str | None = None
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_base_url: str = "https://us.cloud.langfuse.com"

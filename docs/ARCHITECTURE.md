@@ -123,6 +123,30 @@ under a timeout) is what makes end-of-run message counts deterministic; a drain
 that times out means `aborted`, not `completed`, and the reproducibility claim
 would otherwise quietly exclude the runs where it failed.
 
+## CI event sourcing: live and synthetic parity
+
+Ashby's Law again, in miniature: an S1 that could tell a live GitHub run from a
+seeded one would be responding to the source instead of the event, and the
+Phase 9 ablation would be measuring that leak rather than topology. `CIEvent`
+(`sources/events.py`) is the one shape both `GitHubSource` and `SyntheticSource`
+produce; nothing past that boundary carries a `source_mode` branch. Two things
+are deliberately kept off the shared event: cost (per the envelope's own
+rationale, one turn makes zero-or-many model calls) and, for synthetic events
+only, the ground-truth `TruthLabel` -- handing an agent the answer alongside the
+question would make the Phase 2 agreement spot-check and the Phase 9 ablation
+both meaningless. The simulator's flake model is itself seed-consistent rather
+than scripted: a configured test rolls its own failure rate on every appearance,
+so a `FlakeAgent` earns its verdict from the resulting pass/fail history instead
+of a label written to match it.
+
+Structured LLM decisions (`TriageDecision`, `DepDraft`) retry once on schema
+validation failure before raising (hard rule 6); every attempt, successful or
+not, is a cost-accounted `llm_calls` row (hard rule 3). Classification is free
+and deterministic by default -- a keyword responder that reads the same JSON
+context a real call would -- so the synthetic arm's reproducibility (`PYTHONHASHSEED=0`,
+seeded event streams) is not undone by a nondeterministic model call sitting
+in the middle of it; `--live-llm` opts into the real Anthropic client per run.
+
 ## Storage
 
 Postgres is the system of record. Langfuse is a viewer. Every envelope and every
@@ -137,4 +161,10 @@ matrix itself, [kernel/bus.py](../src/viable_agents/kernel/bus.py) for the route
 and its enforcement seams, [kernel/address.py](../src/viable_agents/kernel/address.py)
 for recursion-safe addressing, and [persistence/models.py](../src/viable_agents/persistence/models.py)
 for the tables of record. The two-agent walk-through is
-[demo.py](../src/viable_agents/demo.py).
+[demo.py](../src/viable_agents/demo.py). The Phase 2 CI run is
+[run.py](../src/viable_agents/run.py); the shared event contract is
+[sources/events.py](../src/viable_agents/sources/events.py), the two sources are
+[sources/github.py](../src/viable_agents/sources/github.py) and
+[simulator/generator.py](../src/viable_agents/simulator/generator.py), and the
+three S1 workers are under
+[systems/s1/](../src/viable_agents/systems/s1/).

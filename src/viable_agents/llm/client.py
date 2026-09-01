@@ -4,28 +4,44 @@
 accounting runs end to end with no API key and the sum assertions have exact
 expected values. The real Anthropic client is a thin wrapper reached only by the
 ``live`` test. Both record every call through a ``CallRecorder``, so no code path
-reaches a model without cost accounting (hard rule 3).
+reaches a model without cost accounting (hard rule 3), including failed and
+retried attempts (``attempt_index``, ``succeeded=False`` rows): a triage verdict
+that fails schema validation once and succeeds on retry still cost a call.
+
+Retry-on-invalid (hard rule 6) lives here rather than in the kernel, because it is
+a model-client concern, not a routing one: ``LLMClient.complete`` promises a
+valid ``T`` or an exception, never a caller-visible partial result.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from viable_agents.kernel.address import AgentAddress
 from viable_agents.kernel.clock import Clock
 from viable_agents.kernel.cost import Usage
 from viable_agents.kernel.llm import LLMResult
-from viable_agents.llm.config import ModelsConfig
-from viable_agents.llm.pricing import cost_usd, price_for
+from viable_agents.llm.config import ModelsConfig, TierSpec
+from viable_agents.llm.pricing import Price, cost_usd, price_for
 from viable_agents.llm.recorder import CallRecorder, LLMCall
 
 Responder = Callable[[type[BaseModel], str, Sequence[object]], dict[str, Any]]
 
 _DEFAULT_USAGE = Usage(input_tokens=1200, output_tokens=200)
+
+# Initial attempt plus one retry. A structured-output failure is almost always a
+# formatting slip a second attempt fixes; more than one retry mostly buys extra
+# cost against the $50 project ceiling for the same eventual failure.
+MAX_STRUCTURED_OUTPUT_ATTEMPTS = 2
+
+
+class StructuredOutputError(RuntimeError):
+    """Every retry attempt failed schema validation. Callers see this, never a partial T."""
 
 
 class ScriptedLLMClient:
@@ -68,8 +84,74 @@ class ScriptedLLMClient:
         at = self._clock.now().date()
         price = price_for(spec.prices(), at)
         cost = cost_usd(self._usage, price)
-        parsed = output_model.model_validate(self._responder(output_model, system, messages))
-        call = LLMCall(
+
+        last_error: ValidationError | None = None
+        for attempt in range(MAX_STRUCTURED_OUTPUT_ATTEMPTS):
+            raw = self._responder(output_model, system, messages)
+            try:
+                parsed = output_model.model_validate(raw)
+            except ValidationError as exc:
+                last_error = exc
+                await self._recorder.record(
+                    self._call_row(
+                        turn_id=turn_id,
+                        agent=agent,
+                        spec=spec,
+                        tier=tier,
+                        price=price,
+                        cost=cost,
+                        attempt=attempt,
+                        succeeded=False,
+                        stop_reason="invalid_structured_output",
+                        error=str(exc)[:256],
+                    )
+                )
+                continue
+            await self._recorder.record(
+                self._call_row(
+                    turn_id=turn_id,
+                    agent=agent,
+                    spec=spec,
+                    tier=tier,
+                    price=price,
+                    cost=cost,
+                    attempt=attempt,
+                    succeeded=True,
+                    stop_reason="end_turn",
+                    error=None,
+                )
+            )
+            return LLMResult(
+                parsed=parsed,
+                usage=self._usage,
+                cost_usd=cost,
+                model_id=spec.model_id,
+                tier=tier,
+                stop_reason="end_turn",
+                attempt_index=attempt,
+            )
+
+        msg = (
+            f"structured output for {output_model.__name__} failed validation after "
+            f"{MAX_STRUCTURED_OUTPUT_ATTEMPTS} attempt(s): {last_error}"
+        )
+        raise StructuredOutputError(msg)
+
+    def _call_row(
+        self,
+        *,
+        turn_id: uuid.UUID,
+        agent: AgentAddress,
+        spec: TierSpec,
+        tier: str,
+        price: Price,
+        cost: Decimal,
+        attempt: int,
+        succeeded: bool,
+        stop_reason: str,
+        error: str | None,
+    ) -> LLMCall:
+        return LLMCall(
             id=uuid.uuid4(),
             run_id=self._run_id,
             turn_id=turn_id,
@@ -82,21 +164,12 @@ class ScriptedLLMClient:
             cost_usd=cost,
             price_effective_date=price.effective_from,
             latency_ms=0.0,
-            attempt_index=0,
-            succeeded=True,
-            stop_reason="end_turn",
-            error=None,
+            attempt_index=attempt,
+            succeeded=succeeded,
+            stop_reason=stop_reason,
+            error=error,
             request_id=None,
             trace_id=None,
             ts_wall=self._clock.wall(),
             ts_sim=self._clock.now(),
-        )
-        await self._recorder.record(call)
-        return LLMResult(
-            parsed=parsed,
-            usage=self._usage,
-            cost_usd=cost,
-            model_id=spec.model_id,
-            tier=tier,
-            stop_reason="end_turn",
         )

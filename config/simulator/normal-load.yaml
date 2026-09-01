@@ -1,0 +1,41 @@
+# The Phase 2 baseline scenario: steady CI traffic, no injected incident.
+#
+# anomaly_rates need not sum to 1.0; the remainder is AnomalyClass.NONE (a
+# genuinely unremarkable failure or an outright pass). Flaky tests are drawn from
+# `flaky_tests` with their own per-test rate, which is what makes a flake
+# seed-consistent across repeated appearances rather than a fresh coin flip.
+
+name: normal-load
+seed: 20260831
+event_count: 500
+
+repos:
+  - octo/widgets
+  - octo/api-gateway
+  - octo/data-pipeline
+
+workflow_names: [ci, integration-tests, lint]
+
+branches: [main, feat/retry-backoff, feat/cache-layer, fix/timeout-handling]
+
+# Baseline failure rate for runs the anomaly roll did not touch: most of those
+# pass, matching a real (if deliberately flaky) watchlist rather than a stream
+# that is mostly on fire.
+base_failure_rate: 0.05
+
+anomaly_rates:
+  regression: 0.10
+  flake: 0.12
+  infra: 0.05
+  dependency: 0.08
+  # remainder (~0.65): the base-failure-rate roll above, mostly a pass.
+
+flaky_tests:
+  - test_id: "tests/test_retry.py::test_backoff_jitter"
+    flake_rate: 0.6
+  - test_id: "tests/test_cache.py::test_eviction_order"
+    flake_rate: 0.4
+  - test_id: "tests/integration/test_upload.py::test_large_file"
+    flake_rate: 0.5
+
+dependency_manifests: [requirements.txt, pyproject.toml, package-lock.json]

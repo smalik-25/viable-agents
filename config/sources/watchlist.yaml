@@ -1,13 +1,25 @@
 # Public GitHub repositories the live adapter watches.
 #
-# STUB. Phase 2 fills this in. Selection criteria: public, permissive license,
-# high workflow-run volume, and visibly flaky tests, because a watchlist with
-# green CI gives the triage agents nothing to do.
+# Selection criteria (CLAUDE.md hard rule 5 / PLAN Phase 2): public, permissively
+# licensed, high workflow-run volume, GitHub-Actions-hosted runners (not
+# self-hosted, which would make the demo unreproducible for "a stranger with
+# Docker"), and visibly flaky tests, because a watchlist with green CI gives the
+# triage agents nothing to do. All eight run on GitHub Actions and are large
+# enough Python-ecosystem projects to have genuine, well-documented flaky-test
+# history rather than manufactured examples.
 #
-# The adapter is read-only (CLAUDE.md hard rule 5). Nothing here grants write
-# access and the token must carry no write scope.
+# The adapter is read-only (hard rule 5). Nothing here grants write access and
+# the token must carry no write scope.
 
 poll_interval_seconds: 300
 max_runs_per_repo_per_poll: 25
 
-repos: []
+repos:
+  - pandas-dev/pandas
+  - numpy/numpy
+  - scikit-learn/scikit-learn
+  - python-poetry/poetry
+  - pytest-dev/pytest
+  - urllib3/urllib3
+  - sqlalchemy/sqlalchemy
+  - encode/httpx

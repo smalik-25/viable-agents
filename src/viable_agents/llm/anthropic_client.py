@@ -1,9 +1,10 @@
 """The real Anthropic client. Imported only by the ``live`` test, never the demo.
 
 Kept in its own module so ``import viable_agents.llm`` does not pull ``anthropic``
-onto the default path. This is the minimal wiring that proves cost accounting
-against a real response; Phase 2 extends it (prompt caching, retry-on-invalid,
-the messages.parse structured-output path) when the S1 agents actually call models.
+onto the default path. Retry-on-invalid shares its policy (and its exception
+type) with ``ScriptedLLMClient`` -- see ``llm/client.py`` -- so both paths behave
+identically to a caller. Phase 3+ can still extend this (prompt caching, the
+``messages.parse`` structured-output path) without touching that contract.
 """
 
 from __future__ import annotations
@@ -14,12 +15,13 @@ from collections.abc import Sequence
 from typing import Any
 
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from viable_agents.kernel.address import AgentAddress
 from viable_agents.kernel.clock import Clock
 from viable_agents.kernel.cost import Usage
 from viable_agents.kernel.llm import LLMResult
+from viable_agents.llm.client import MAX_STRUCTURED_OUTPUT_ATTEMPTS, StructuredOutputError
 from viable_agents.llm.config import ModelsConfig
 from viable_agents.llm.pricing import cost_usd, price_for
 from viable_agents.llm.recorder import CallRecorder, LLMCall
@@ -74,51 +76,92 @@ class AnthropicLLMClient:
         full_system = (
             f"{system}\n\nRespond with ONLY a JSON object matching this schema, no prose:\n{schema}"
         )
-        started = time.monotonic()
-        raw = await self._client.messages.create(
-            model=spec.model_id,
-            max_tokens=max_tokens,
-            system=full_system,
-            messages=list(messages),  # type: ignore[arg-type]
+
+        last_error: Exception | None = None
+        for attempt in range(MAX_STRUCTURED_OUTPUT_ATTEMPTS):
+            started = time.monotonic()
+            raw = await self._client.messages.create(
+                model=spec.model_id,
+                max_tokens=max_tokens,
+                system=full_system,
+                messages=list(messages),  # type: ignore[arg-type]
+            )
+            latency_ms = (time.monotonic() - started) * 1000.0
+            text = "".join(getattr(block, "text", "") for block in raw.content)
+            usage = _usage_from_response(raw.usage)
+            at = self._clock.now().date()
+            price = price_for(spec.prices(), at)
+            cost = cost_usd(usage, price)
+            request_id = raw._request_id  # noqa: SLF001 - public despite the underscore
+
+            try:
+                parsed = output_model.model_validate_json(text)
+            except ValidationError as exc:
+                last_error = exc
+                await self._recorder.record(
+                    LLMCall(
+                        id=uuid.uuid4(),
+                        run_id=self._run_id,
+                        turn_id=turn_id,
+                        agent_path=agent.canonical(),
+                        agent_role=agent.role.value,
+                        vsm_level=agent.level,
+                        model_id=spec.model_id,
+                        tier=tier,
+                        usage=usage,
+                        cost_usd=cost,
+                        price_effective_date=price.effective_from,
+                        latency_ms=latency_ms,
+                        attempt_index=attempt,
+                        succeeded=False,
+                        stop_reason="invalid_structured_output",
+                        error=str(exc)[:256],
+                        request_id=request_id,
+                        trace_id=None,
+                        ts_wall=self._clock.wall(),
+                        ts_sim=self._clock.now(),
+                    )
+                )
+                continue
+
+            await self._recorder.record(
+                LLMCall(
+                    id=uuid.uuid4(),
+                    run_id=self._run_id,
+                    turn_id=turn_id,
+                    agent_path=agent.canonical(),
+                    agent_role=agent.role.value,
+                    vsm_level=agent.level,
+                    model_id=spec.model_id,
+                    tier=tier,
+                    usage=usage,
+                    cost_usd=cost,
+                    price_effective_date=price.effective_from,
+                    latency_ms=latency_ms,
+                    attempt_index=attempt,
+                    succeeded=True,
+                    stop_reason=raw.stop_reason or "end_turn",
+                    error=None,
+                    request_id=request_id,
+                    trace_id=None,
+                    ts_wall=self._clock.wall(),
+                    ts_sim=self._clock.now(),
+                )
+            )
+            return LLMResult(
+                parsed=parsed,
+                usage=usage,
+                cost_usd=cost,
+                model_id=spec.model_id,
+                tier=tier,
+                stop_reason=raw.stop_reason or "end_turn",
+                request_id=request_id,
+                latency_ms=latency_ms,
+                attempt_index=attempt,
+            )
+
+        msg = (
+            f"structured output for {output_model.__name__} failed validation after "
+            f"{MAX_STRUCTURED_OUTPUT_ATTEMPTS} attempt(s): {last_error}"
         )
-        latency_ms = (time.monotonic() - started) * 1000.0
-        text = "".join(getattr(block, "text", "") for block in raw.content)
-        parsed = output_model.model_validate_json(text)
-        usage = _usage_from_response(raw.usage)
-        at = self._clock.now().date()
-        price = price_for(spec.prices(), at)
-        cost = cost_usd(usage, price)
-        request_id = raw._request_id  # noqa: SLF001 - public despite the underscore
-        call = LLMCall(
-            id=uuid.uuid4(),
-            run_id=self._run_id,
-            turn_id=turn_id,
-            agent_path=agent.canonical(),
-            agent_role=agent.role.value,
-            vsm_level=agent.level,
-            model_id=spec.model_id,
-            tier=tier,
-            usage=usage,
-            cost_usd=cost,
-            price_effective_date=price.effective_from,
-            latency_ms=latency_ms,
-            attempt_index=0,
-            succeeded=True,
-            stop_reason=raw.stop_reason or "end_turn",
-            error=None,
-            request_id=request_id,
-            trace_id=None,
-            ts_wall=self._clock.wall(),
-            ts_sim=self._clock.now(),
-        )
-        await self._recorder.record(call)
-        return LLMResult(
-            parsed=parsed,
-            usage=usage,
-            cost_usd=cost,
-            model_id=spec.model_id,
-            tier=tier,
-            stop_reason=raw.stop_reason or "end_turn",
-            request_id=request_id,
-            latency_ms=latency_ms,
-        )
+        raise StructuredOutputError(msg)

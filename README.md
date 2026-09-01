@@ -16,12 +16,16 @@ agents triage failing builds, classify flaky tests, and summarise dependency
 bumps, against either live public repositories (read-only) or a seeded simulator
 with ground-truth failure labels.
 
-Status: Phase 1. The kernel runs. A data-driven routing matrix (500 cells, total,
-39 differing between the flat and full-VSM arms), a bus that enforces whichever
-topology it is handed, path-shaped recursion-safe addresses, a dual clock for
-deterministic runs, Postgres persistence behind an Alembic migration, and a
-self-verifying two-agent demo. The kernel is 1,173 lines, `mypy --strict` clean,
-and imports nothing heavier than Pydantic.
+Status: Phase 2. The kernel runs (a data-driven routing matrix, 500 cells total,
+39 differing between the flat and full-VSM arms; a bus that enforces whichever
+topology it is handed; path-shaped recursion-safe addresses; a dual clock;
+Postgres persistence behind Alembic migrations), and real work happens on top of
+it: a seeded synthetic CI simulator that doubles as eval ground truth, a
+read-only GitHub live adapter, and three S1 agents (build triage, flake
+detection, dependency-bump summaries) that cannot tell which source an event
+came from. `uv run viable-agents run --source synthetic --events 500 --verify`
+is self-checking the way the Phase 1 demo is. The kernel is 1,165 lines,
+`mypy --strict` clean, and imports nothing heavier than Pydantic.
 
 ## Why this and not a graph framework
 
@@ -49,13 +53,14 @@ vertical channels into five.
 
 | Component | Module | Model tier |
 |---|---|---|
-| S1 Operations | [systems/s1](src/viable_agents/systems/s1) | Haiku-class |
+| S1 Operations | [systems/s1](src/viable_agents/systems/s1) | Haiku-class (FlakeAgent: none, pure code) |
 | S2 Coordination | [systems/s2](src/viable_agents/systems/s2) | none, pure code |
 | S3 Control | [systems/s3](src/viable_agents/systems/s3) | Sonnet-class |
 | S3* Audit | [posiwid](src/viable_agents/posiwid) | Sonnet-class |
 | S4 Intelligence | [systems/s4](src/viable_agents/systems/s4) | Sonnet-class |
 | S5 Policy | [systems/s5](src/viable_agents/systems/s5) | Sonnet-class + human |
 | Algedonic bus | [algedonic](src/viable_agents/algedonic) | detectors are code |
+| CI sources | [sources](src/viable_agents/sources), [simulator](src/viable_agents/simulator) | n/a (read-only adapter, seeded generator) |
 | Kernel | [kernel](src/viable_agents/kernel) | n/a |
 
 Model tiering is Ashby's Law used as a routing table rather than as decoration:
@@ -72,17 +77,23 @@ git clone https://github.com/smalik-25/viable-agents && cd viable-agents
 uv sync
 make gate                        # ruff, mypy, pytest
 uv run viable-agents demo --verify   # two agents over the bus, self-checked
+uv run viable-agents run --source synthetic --events 500 --verify  # the S1 fleet
 
 docker compose up -d             # Postgres 16 on port 5433
 uv run alembic upgrade head      # build the schema
 uv run pytest                    # includes the Postgres integration tests
 ```
 
+`run --source live` needs a read-only `GITHUB_TOKEN`; `--live-llm` needs
+`ANTHROPIC_API_KEY` and spends against the project's $50 ceiling. Neither is
+required for the default synthetic, scripted-classifier path above, which is
+free and deterministic.
+
 ## Roadmap
 
 - [x] Phase 0: repo bootstrap, CI, architecture stub
 - [x] Phase 1: kernel (envelope, bus, agent base, routing matrix, persistence)
-- [ ] Phase 2: CI event sources, three S1 worker types
+- [x] Phase 2: CI event sources, three S1 worker types
 - [ ] Phase 3: S2 coordination, the anti-oscillation test
 - [ ] Phase 4: S3 control, budget allocation
 - [ ] Phase 5: S5 policy, charter, human channel

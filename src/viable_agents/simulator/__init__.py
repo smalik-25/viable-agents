@@ -11,3 +11,13 @@ from a model's opinion. Failure injection (`--inject cost_bomb|tool_outage|drift
 carries a ground-truth onset timestamp so time-to-detection is measurable.
 Phase 2, extended in Phase 6.
 """
+
+from viable_agents.simulator.config import FlakyTestSpec, ScenarioConfig, load_scenario
+from viable_agents.simulator.generator import SyntheticSource
+
+__all__ = [
+    "FlakyTestSpec",
+    "ScenarioConfig",
+    "SyntheticSource",
+    "load_scenario",
+]
