@@ -25,6 +25,9 @@ dependencies = [
     "langfuse>=4.14.1,<5",
     "anthropic>=0.117.0,<1",
     "typer>=0.27.0,<1",
+    # Phase 2: the read-only GitHub adapter (sources/github.py). Already present
+    # transitively via anthropic; declared explicitly since we import it directly.
+    "httpx>=0.28.1,<1",
 ]
 
 [project.scripts]

@@ -4,6 +4,8 @@
 # where events land. Three of the four Phase 9 arms differ in exactly those two
 # things, which is why this file exists alongside config/topology/. The Phase 1
 # demo instantiates a subset of this roster (an S3 and an S1) to exchange messages.
+# Phase 2 fills in the full S1 roster: run.py reads agent_type below to build the
+# right class, so a fourth S1 worker type lands here before it lands in code.
 
 name: vsm
 scope: [fleet]          # the recursion scope these agents live in (level 0)
@@ -14,7 +16,19 @@ agents:
     role: s1
     agent_type: BuildTriageAgent
     model_tier: haiku
-    budget_usd: "0.24"
+    budget_usd: "0.15"
+  - path: [fleet, flake_0]
+    role: s1
+    agent_type: FlakeAgent
+    # Pure code (see systems/s1/flake.py): flakiness is decided by a threshold
+    # over observed history, not a model call.
+    model_tier: none
+    budget_usd: "0.00"
+  - path: [fleet, dep_0]
+    role: s1
+    agent_type: DepAgent
+    model_tier: haiku
+    budget_usd: "0.09"
   - path: [fleet, coordinator_0]
     role: s2
     agent_type: Coordinator

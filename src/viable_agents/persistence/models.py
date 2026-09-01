@@ -156,6 +156,25 @@ class LLMCallRow(Base):
     )
 
 
+class GitHubCacheRow(Base):
+    """Phase 2 read-only adapter cache: one row per fetched GitHub API URL.
+
+    Not run-scoped, deliberately: cached GitHub responses outlive any one run and
+    are reused across polls and across seeds, which is the point of caching
+    aggressively against a rate-limited API (CLAUDE.md hard rule 5). ``etag``
+    drives conditional GETs so an unchanged resource costs no rate-limit budget
+    on the next poll.
+    """
+
+    __tablename__ = "github_cache"
+
+    url: Mapped[str] = mapped_column(String(512), primary_key=True)
+    etag: Mapped[str | None] = mapped_column(String(128), default=None)
+    status_code: Mapped[int] = mapped_column(default=200)
+    body: Mapped[dict[str, Any]]
+    fetched_at: Mapped[dt.datetime] = mapped_column(server_default=text("now()"))
+
+
 class ChannelSaturationRow(Base):
     """Beer's Principle 2 made measurable: the metric a generic orchestrator omits."""
 

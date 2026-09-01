@@ -2,6 +2,107 @@
 
 Running log of what changed and why. Newest first.
 
+## 2026-08-31 - Phase 2: CI event sources and the three S1 workers
+
+Real work happening: a seeded synthetic CI simulator that doubles as eval ground
+truth, a read-only GitHub live adapter, and three S1 agents (`BuildTriageAgent`,
+`FlakeAgent`, `DepAgent`) that cannot tell which source an event came from
+(hard rule 4). `uv run viable-agents run --source synthetic --events 500 --verify`
+is the phase's self-verifying entry point, the way `demo --verify` gates v0.1: it
+streams 500 seeded events through the fleet and checks that triage verdicts and
+flake/dependency reports were produced, no agent degraded, and (synthetic mode
+only) `BuildTriageAgent`'s verdicts agree with the ground-truth labels at or above
+70%. Measured agreement on `config/simulator/normal-load.yaml` is 100% against
+the free scripted classifier, which is closer to "the heuristics were written to
+match the generator's own text" than a claim about a real model's accuracy; the
+number that will mean something is the one from a `--live-llm` pass.
+
+What's new, by seam:
+
+- **`CIEvent` is the one shape both sources produce** (`sources/events.py`), a
+  `Payload` so it rides an envelope and rehydrates through the existing registry
+  with no kernel change. The ground-truth `TruthLabel` is deliberately NOT on the
+  event: it lives in a side manifest the synthetic source keeps, so an S1 can
+  never read the answer off the question it was handed.
+- **The synthetic generator's flakiness is a discovered pattern, not a scripted
+  one.** A configured flaky test rolls its own `flake_rate` on every appearance
+  (`random.Random(seed)`, never the module-level `random`), so the same test
+  passes most of the time and fails at roughly its configured rate across the
+  whole stream. `FlakeAgent` is pure code, no model tier, for the same reason S2
+  will be: flakiness is a threshold over an observed distribution, and a Haiku
+  call could not decide it any better than the arithmetic does.
+- **The GitHub adapter has exactly one method capable of an HTTP request**
+  (`GitHubSource._get`), and it only ever issues a GET; every response is cached
+  by URL (`github_cache`, not run-scoped: the point is to spend rate limit once
+  per URL, forever) with conditional `If-None-Match` re-fetches. Rate-limit
+  exhaustion raises `GitHubRateLimitError` with the reset time rather than
+  sleeping for an unbounded span. `tests/unit/test_github_source.py` asserts the
+  no-write claim twice: statically (no `self._client.{post,patch,put,delete}(`
+  in the module) and dynamically (a mock transport that raises on any non-GET).
+- **Retry-on-invalid, closing a hard-rule-6 gap from Phase 1.** Neither
+  `ScriptedLLMClient` nor `AnthropicLLMClient` actually retried a structured
+  output that failed schema validation; both raised immediately. Both now retry
+  once (`MAX_STRUCTURED_OUTPUT_ATTEMPTS = 2`) and record a `llm_calls` row for
+  every attempt, failed or not, before raising `StructuredOutputError` if every
+  attempt failed. This is Phase 1 infrastructure, not Phase 2 scope by the
+  letter of PLAN.md, but Phase 2 is the first phase where a structured decision
+  runs in anger, and it is cheaper to close the gap at the source than to write
+  a test against a feature that does not exist.
+- **The fleet roster is config, not a hardcoded address list.** `run.py` reads
+  `config/fleet/vsm.yaml`'s `agent_type` field and builds the matching class
+  from a small registry; a fourth S1 worker type is a config addition plus a
+  registry entry, not a rewrite of the run loop. `config/fleet/vsm.yaml` now
+  lists `flake_0` and `dep_0` alongside `build_triage_0`.
+- **Structured decisions are free and deterministic by default.** The scripted
+  responders (`systems/s1/scripting.py`) read the same JSON context a real
+  Haiku call would; `--live-llm` swaps in `AnthropicLLMClient` per run. Nothing
+  in CI or the default test suite spends against the $50 project ceiling.
+
+Watchlist (`config/sources/watchlist.yaml`): eight Python-ecosystem repos chosen
+for GitHub-Actions-hosted (not self-hosted) runners, permissive licenses, and
+workflow-run volume high enough to have genuine flaky-test history --
+`pandas-dev/pandas`, `numpy/numpy`, `scikit-learn/scikit-learn`,
+`python-poetry/poetry`, `pytest-dev/pytest`, `urllib3/urllib3`,
+`sqlalchemy/sqlalchemy`, `encode/httpx`.
+
+Housekeeping: `httpx` moves from a transitive dependency (via `anthropic`) to an
+explicit one, since `sources/github.py` now imports it directly. New migration
+`0002_github_cache` (explicit `op.create_table`, not `create_all`; only the
+initial revision uses that shortcut).
+
+Not yet verified:
+
+- The live watchlist pass and the real spot-check against hand-labeled runs both
+  need a minted, read-only `GITHUB_TOKEN` and `ANTHROPIC_API_KEY`; neither is set
+  yet. `uv run viable-agents run --source live --live-llm --verify` is that run
+  when the keys exist.
+- Environmental notes for whoever runs this next, both pre-existing and neither
+  a Phase 2 regression: `uv run pytest` and even plain file reads under `.venv`
+  intermittently stalled for minutes on this machine during this session, traced
+  to Docker Desktop's virtiofs share over `/Users` colliding with Time Machine's
+  `backupd-helper`, both starting around the same time; `.venv/bin/python -m
+  pytest` directly (bypassing `uv run`) was unaffected once both settled. And
+  the Anaconda-base editable-install flake CLAUDE.md already documents recurred:
+  `viable_agents.pth` existed with the correct path but `site.py` was not
+  applying it, so `uv run viable-agents ...` raised `ModuleNotFoundError` right
+  after the identical invocation had worked; `uv sync --reinstall-package
+  viable-agents` fixed it, as it did in Phase 1. Full suite: 584 passed, and
+  `uv run viable-agents run --source synthetic --events 200 --verify` passes
+  through the real entry point.
+
+## 2026-08-31 - Phase 1 hardening: an ORM flush-ordering bug in the persistence layer
+
+`test_envelope_row_persists_with_payload` (a new `RunRow` and a new `MessageRow`
+committed in one session) intermittently raised a Postgres foreign-key violation.
+Cause: SQLAlchemy's unit-of-work only orders inserts across mapper classes when a
+`relationship()` gives it a dependency edge; without one it falls back to
+alphabetical-by-table-name (`agents`, `messages`, ... before `runs`), so a child
+row could insert before its parent existed. Fix: a plain `run: Mapped[RunRow] =
+relationship()` on `AgentRow`, `MessageRow`, `LLMCallRow`, and
+`ChannelSaturationRow`. Verified by temporarily removing the relationship and
+reproducing the exact `ForeignKeyViolationError` against a real Postgres, then
+restoring it and confirming the commit succeeds.
+
 ## 2026-07-21 - Phase 1: the kernel, persistence, and a self-verifying demo
 
 Built the smallest thing that is recognizably a VSM substrate. The kernel is 12
