@@ -21,7 +21,12 @@ from viable_agents.kernel.address import AgentAddress
 from viable_agents.kernel.clock import Clock
 from viable_agents.kernel.cost import Usage
 from viable_agents.kernel.llm import LLMResult
-from viable_agents.llm.client import MAX_STRUCTURED_OUTPUT_ATTEMPTS, StructuredOutputError
+from viable_agents.llm.budget import BudgetGuard
+from viable_agents.llm.client import (
+    MAX_STRUCTURED_OUTPUT_ATTEMPTS,
+    StructuredOutputError,
+    check_budget_or_refuse,
+)
 from viable_agents.llm.config import ModelsConfig
 from viable_agents.llm.pricing import cost_usd, price_for
 from viable_agents.llm.recorder import CallRecorder, LLMCall
@@ -53,12 +58,14 @@ class AnthropicLLMClient:
         clock: Clock,
         recorder: CallRecorder,
         run_id: uuid.UUID,
+        budget: BudgetGuard | None = None,
     ) -> None:
         self._client = client
         self._models = models
         self._clock = clock
         self._recorder = recorder
         self._run_id = run_id
+        self._budget = budget
 
     async def complete[T: BaseModel](
         self,
@@ -77,8 +84,24 @@ class AnthropicLLMClient:
             f"{system}\n\nRespond with ONLY a JSON object matching this schema, no prose:\n{schema}"
         )
 
+        # Price selection depends only on today's date, not on the response, so it
+        # is resolved once up front and reused for the pre-attempt budget check.
+        price = price_for(spec.prices(), self._clock.now().date())
+
         last_error: Exception | None = None
         for attempt in range(MAX_STRUCTURED_OUTPUT_ATTEMPTS):
+            await check_budget_or_refuse(
+                self._budget,
+                agent=agent,
+                recorder=self._recorder,
+                run_id=self._run_id,
+                turn_id=turn_id,
+                spec=spec,
+                tier=tier,
+                price=price,
+                attempt=attempt,
+                clock=self._clock,
+            )
             started = time.monotonic()
             raw = await self._client.messages.create(
                 model=spec.model_id,
@@ -89,8 +112,6 @@ class AnthropicLLMClient:
             latency_ms = (time.monotonic() - started) * 1000.0
             text = "".join(getattr(block, "text", "") for block in raw.content)
             usage = _usage_from_response(raw.usage)
-            at = self._clock.now().date()
-            price = price_for(spec.prices(), at)
             cost = cost_usd(usage, price)
             request_id = raw._request_id  # noqa: SLF001 - public despite the underscore
 
@@ -122,6 +143,8 @@ class AnthropicLLMClient:
                         ts_sim=self._clock.now(),
                     )
                 )
+                if self._budget is not None:
+                    self._budget.record(agent, cost)
                 continue
 
             await self._recorder.record(
@@ -148,6 +171,8 @@ class AnthropicLLMClient:
                     ts_sim=self._clock.now(),
                 )
             )
+            if self._budget is not None:
+                self._budget.record(agent, cost)
             return LLMResult(
                 parsed=parsed,
                 usage=usage,

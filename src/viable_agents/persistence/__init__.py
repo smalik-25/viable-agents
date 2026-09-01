@@ -11,7 +11,14 @@ from viable_agents.persistence.models import (
     GitHubCacheRow,
     LLMCallRow,
     MessageRow,
+    RunReportRow,
     RunRow,
+)
+from viable_agents.persistence.run_reports import (
+    InMemoryRunReportRecorder,
+    PostgresRunReportRecorder,
+    RunReportRecord,
+    RunReportRecorder,
 )
 from viable_agents.persistence.session import make_engine, make_session_factory
 from viable_agents.persistence.sink import InMemorySink, PostgresSink, envelope_to_row
@@ -21,10 +28,15 @@ __all__ = [
     "Base",
     "ChannelSaturationRow",
     "GitHubCacheRow",
+    "InMemoryRunReportRecorder",
     "InMemorySink",
     "LLMCallRow",
     "MessageRow",
+    "PostgresRunReportRecorder",
     "PostgresSink",
+    "RunReportRecord",
+    "RunReportRecorder",
+    "RunReportRow",
     "RunRow",
     "envelope_to_row",
     "make_engine",

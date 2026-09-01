@@ -6,6 +6,13 @@
 # demo instantiates a subset of this roster (an S3 and an S1) to exchange messages.
 # Phase 2 fills in the full S1 roster: run.py reads agent_type below to build the
 # right class, so a fourth S1 worker type lands here before it lands in code.
+#
+# Phase 4 adds `priority`: which S1 units Controller sheds first under a starved
+# run budget (higher runs longer under pressure). S1 workers get the lowest
+# values, since they are the only units Controller actually sheds; the
+# metasystem seats are given placeholder values reflecting Beer's hierarchy
+# (S5 identity outranks S3/S4/S3*, all of which outrank operations) ahead of
+# their own phases actually instantiating them.
 
 name: vsm
 scope: [fleet]          # the recursion scope these agents live in (level 0)
@@ -17,6 +24,7 @@ agents:
     agent_type: BuildTriageAgent
     model_tier: haiku
     budget_usd: "0.15"
+    priority: 30
   - path: [fleet, flake_0]
     role: s1
     agent_type: FlakeAgent
@@ -24,33 +32,40 @@ agents:
     # over observed history, not a model call.
     model_tier: none
     budget_usd: "0.00"
+    priority: 10
   - path: [fleet, dep_0]
     role: s1
     agent_type: DepAgent
     model_tier: haiku
     budget_usd: "0.09"
+    priority: 20
   - path: [fleet, coordinator_0]
     role: s2
     agent_type: Coordinator
     model_tier: none
     budget_usd: "0.00"
+    priority: 70
   - path: [fleet, controller_0]
     role: s3
     agent_type: Controller
     model_tier: sonnet
     budget_usd: "0.14"
+    priority: 90
   - path: [fleet, auditor_0]
     role: s3star
     agent_type: PosiwidAuditor
     model_tier: sonnet
     budget_usd: "0.11"
+    priority: 85
   - path: [fleet, intel_0]
     role: s4
     agent_type: IntelAgent
     model_tier: sonnet
     budget_usd: "0.07"
+    priority: 80
   - path: [fleet, policy_0]
     role: s5
     agent_type: PolicyAgent
     model_tier: sonnet
     budget_usd: "0.11"
+    priority: 100

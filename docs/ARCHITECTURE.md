@@ -185,6 +185,53 @@ test in that file demonstrates the failure with coordination switched off
 (`BuildTriageAgent(coordinate=False)`, Phase 2's original, unmediated behavior)
 before the fix exists to remove it, per CLAUDE.md hard rule 8.
 
+## S3 control: the resource bargain and hard spend caps
+
+Every S1 accountability report already landed in the S3 seat's inbox since
+Phase 2 (`cmd_s1_s3_account`, reserved since Phase 1); nothing consumed it
+until `Controller` existed. Two independent mechanisms enforce budget, at two
+different granularities, and neither substitutes for the other:
+
+**`BudgetGuard`** (`llm/budget.py`) is a hard, per-agent-instance stop, checked
+by the LLM clients themselves before every call attempt -- never a bus seam,
+because `self.llm.complete(...)` never crosses `Bus.send()`, so `add_pre_send`
+cannot see it despite an earlier version of that seam's docstring claiming
+otherwise. The check runs once per retry attempt inside the existing
+retry-on-invalid loop (hard rule 6), not once per `complete()` call: a
+validation retry records its own full-cost `llm_calls` row, so a check only
+at the top of the method would let it cross the cap unrefused. A refusal
+still writes a `$0`, `succeeded=False` row before raising, so it is data
+(hard rule 3), not only an exception.
+
+**`Controller`** (S3, `systems/s3/controller.py`) is a softer, proactive
+run-pool monitor. It tracks cumulative spend (read from the same
+`BudgetGuard` the clients write to -- one ledger, not two) against
+`config/budgets.yaml`'s run pool on every accountability report, and pauses
+the lowest-priority live S1 once the pool is spent: graceful shedding, ahead
+of and distinct from any individual agent ever hitting its own hard cap. It
+resumes the highest-priority paused agent when a running agent permanently
+exits the pool contest by hitting its own `BudgetGuard` cap -- the only valid
+headroom signal available, since cumulative spend is monotonic and never
+refunds; comparing it against a fixed pool on every single report will
+otherwise re-trigger a shed every time once tripped; the implementation
+arms/disarms shedding around each resume to keep at most one shed per
+distinct overage.
+
+The allocation decision itself is deterministic, not LLM-decided, extending
+S2's "code attenuates cheaper than tokens" argument to the one place a wrong
+call would be a safety issue rather than an accuracy one. `Controller`'s one
+Sonnet-tier call drafts the `RunReport` narrative -- prose, not a decision --
+and falls back to an empty string on failure rather than propagating, so the
+agent responsible for preventing degradation cannot degrade itself over it.
+
+`priority: int` (`config/fleet/vsm.yaml`) decides who gets shed first; S1
+workers hold the lowest values, since they are the only units actually
+managed this way today. A `RunReport` (work done, cost, anomaly counts per
+agent, the narrative) lands in Postgres every `report_every` accountability
+reports and once more at drain -- event-count cadence, not a wall-clock
+timer, so it stays deterministic without exercising `Clock.call_later`
+(reserved, unused until a phase actually needs mid-run wall-clock timing).
+
 ## Storage
 
 Postgres is the system of record. Langfuse is a viewer. Every envelope and every
@@ -210,3 +257,8 @@ and coordinator are [systems/s2/ledger.py](../src/viable_agents/systems/s2/ledge
 and [systems/s2/coordinator.py](../src/viable_agents/systems/s2/coordinator.py);
 the thrash test is
 [tests/unit/test_s2_coordination.py](../tests/unit/test_s2_coordination.py).
+The Phase 4 budget guard and controller are
+[llm/budget.py](../src/viable_agents/llm/budget.py) and
+[systems/s3/controller.py](../src/viable_agents/systems/s3/controller.py); the
+RunReport shape is
+[systems/s3/reports.py](../src/viable_agents/systems/s3/reports.py).

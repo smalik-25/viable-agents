@@ -14,6 +14,13 @@ fire-and-forget -- the agent stashes the causing envelope and returns, rather th
 blocking its single inbox on a reply that may be preceded by other work -- and
 ``resume_claim`` is how a later, unrelated ``handle()`` call (the ARBITRATE reply)
 picks that stashed work back up.
+
+Phase 4 adds ``_handle_control``: COMMAND/pause and COMMAND/resume from
+``Controller`` (``cmd_s3_s1_pause``/``cmd_s3_s1_resume``, reserved since Phase 1
+but unconsumed until now). Every concrete S1 ``handle()`` calls it first and
+returns early on a hit, or a pause directive would silently drop -- ``Agent``
+already implements ``pause()``/``resume()`` (clearing/setting the event that
+gates the receive loop); nothing called them before this.
 """
 
 from __future__ import annotations
@@ -44,6 +51,19 @@ class S1Worker(Agent):
         super().__init__(**kw)
         self.fleet_scope = fleet_scope
         self._pending_claims: dict[tuple[ClaimKey, str], Envelope] = {}
+
+    async def _handle_control(self, env: Envelope) -> bool:
+        """COMMAND/pause and COMMAND/resume from Controller. Returns True if this
+        envelope was a control directive (the caller should not process it further)."""
+        if env.channel is not Channel.COMMAND:
+            return False
+        if env.intent is Intent.PAUSE:
+            await self.pause()
+            return True
+        if env.intent is Intent.RESUME:
+            await self.resume()
+            return True
+        return False
 
     async def report(self, payload: Payload, *, causation: Envelope) -> None:
         await self.emit(

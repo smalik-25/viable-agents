@@ -8,7 +8,9 @@ distinct persisted ``reject_reason`` so Phase 6 detectors can key on it. Catchin
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
+from viable_agents.kernel.address import AgentAddress
 from viable_agents.kernel.channels import Channel, Intent, Role
 
 
@@ -67,7 +69,16 @@ class ChannelSaturatedError(KernelError):
 
 
 class BudgetExceededError(KernelError):
-    """Phase 4 raises this from the pre-send seam. Defined now so the seam is typed."""
+    """Phase 4: an agent's cumulative spend has reached its cap, or the run has
+    reached the project ceiling. Raised by the LLM client before issuing a call
+    (never the bus -- see ``llm/budget.py``'s module docstring for why an
+    inter-agent-envelope seam cannot see model-provider spend)."""
+
+    def __init__(self, *, agent: AgentAddress, cap_usd: Decimal, spent_usd: Decimal) -> None:
+        self.agent = agent
+        self.cap_usd = cap_usd
+        self.spent_usd = spent_usd
+        super().__init__(f"{agent} budget exceeded: spent ${spent_usd} against a ${cap_usd} cap")
 
 
 class BusClosedError(KernelError):

@@ -30,6 +30,10 @@ class AgentSpec(BaseModel):
     agent_type: str
     model_tier: str = "none"
     budget_usd: Decimal = Decimal("0")
+    # Phase 4: which S1 units Controller sheds first under a starved run budget.
+    # Higher runs longer under pressure. Config-driven since it decides
+    # Phase-9-ablation-relevant behavior (hard rule 7), not a Python branch.
+    priority: int = 0
 
 
 class Ingress(BaseModel):

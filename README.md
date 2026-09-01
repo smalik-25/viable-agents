@@ -16,7 +16,7 @@ agents triage failing builds, classify flaky tests, and summarise dependency
 bumps, against either live public repositories (read-only) or a seeded simulator
 with ground-truth failure labels.
 
-Status: Phase 3. The kernel runs (a data-driven routing matrix, 500 cells total,
+Status: Phase 4. The kernel runs (a data-driven routing matrix, 500 cells total,
 39 differing between the flat and full-VSM arms; a bus that enforces whichever
 topology it is handed; path-shaped recursion-safe addresses; a dual clock;
 Postgres persistence behind Alembic migrations), and real work happens on top of
@@ -26,10 +26,13 @@ detection, dependency-bump summaries) that cannot tell which source an event
 came from. `BuildTriageAgent` now claims a run through S2's `Coordinator`
 before classifying and releases it once it reports, so two instances of the
 same worker type racing the same workflow run do not both report it -- a
-work-claim ledger, pure code, no model call. `uv run viable-agents run
---source synthetic --events 500 --verify` is self-checking the way the Phase 1
-demo is. The kernel is 1,165 lines, `mypy --strict` clean, and imports nothing
-heavier than Pydantic.
+work-claim ledger, pure code, no model call. `Controller` (S3) enforces hard
+per-agent spend caps, sheds low-priority S1 work and resumes it when a
+starved run's budget pool is under pressure, and emits a periodic `RunReport`
+to Postgres. `uv run viable-agents run --source synthetic --events 500
+--verify` is self-checking the way the Phase 1 demo is (`--starved-budget`
+demonstrates graceful shedding). The kernel is 1,182 lines, `mypy --strict`
+clean, and imports nothing heavier than Pydantic.
 
 ## Why this and not a graph framework
 
@@ -82,6 +85,7 @@ uv sync
 make gate                        # ruff, mypy, pytest
 uv run viable-agents demo --verify   # two agents over the bus, self-checked
 uv run viable-agents run --source synthetic --events 500 --verify  # the S1 fleet
+uv run viable-agents run --source synthetic --events 500 --starved-budget --verify  # S3 sheds
 
 docker compose up -d             # Postgres 16 on port 5433
 uv run alembic upgrade head      # build the schema
@@ -99,7 +103,7 @@ free and deterministic.
 - [x] Phase 1: kernel (envelope, bus, agent base, routing matrix, persistence)
 - [x] Phase 2: CI event sources, three S1 worker types
 - [x] Phase 3: S2 coordination, the anti-oscillation test
-- [ ] Phase 4: S3 control, budget allocation
+- [x] Phase 4: S3 control, budget allocation
 - [ ] Phase 5: S5 policy, charter, human channel
 - [ ] Phase 6: algedonic bus, failure injection, time-to-detection
 - [ ] Phase 7: POSIWID auditor, judge calibration

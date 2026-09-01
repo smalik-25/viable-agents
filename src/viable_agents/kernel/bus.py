@@ -3,10 +3,16 @@
 The send path is: closed-check, closure-check (recursion safety), topology
 authorization, the pre-send seam, resolve and fan out, enqueue under the channel's
 overflow policy, then the observer taps. Three seams are named now with fixed
-signatures so Phase 4 (budget veto) and Phase 6 (monitors) attach without editing
-this file. A refused send is recorded with its deciding rule id before the
-exception is raised, because in this project a refusal is a research output, not
-only an error.
+signatures so Phase 6 (monitors) attaches without editing this file. A refused
+send is recorded with its deciding rule id before the exception is raised,
+because in this project a refusal is a research output, not only an error.
+
+Phase 4's per-agent budget cap is NOT a pre-send hook, despite an earlier version
+of this comment claiming otherwise: an LLM call is ``self.llm.complete(...)``,
+called directly by an agent, and never crosses ``Bus.send()`` at all, so a
+bus-level seam cannot see it. Budget enforcement lives in ``llm/budget.py``'s
+``BudgetGuard``, consulted by the LLM clients themselves. ``add_pre_send``
+remains free for a genuine per-envelope veto if a future phase needs one.
 """
 
 from __future__ import annotations
@@ -55,8 +61,8 @@ class Sink(Protocol):
     ) -> None: ...
 
 
-# The three named seams. Signatures fixed now so Phase 4 and Phase 6 add no edits.
-PreSend = Callable[[Envelope], Awaitable[None]]  # raise to veto (Phase 4 BudgetExceededError)
+# The three named seams. Signatures fixed now so future phases add no edits here.
+PreSend = Callable[[Envelope], Awaitable[None]]  # raise to veto an envelope send
 PostDeliver = Callable[[Envelope], Awaitable[None]]  # observe only
 Tap = Callable[[Envelope], None]  # synchronous, must not block or raise
 
@@ -94,7 +100,9 @@ class Bus:
 
     # seams
     def add_pre_send(self, hook: PreSend) -> None:
-        """Phase 4 attaches the per-agent cost cap here. Raising vetoes the send."""
+        """Register a veto hook. Raising here rejects the envelope before it is
+        enqueued. Not where the Phase 4 budget cap lives -- see the module
+        docstring; an LLM call never reaches this seam."""
         self._pre_send.append(hook)
 
     def add_post_deliver(self, hook: PostDeliver) -> None:
