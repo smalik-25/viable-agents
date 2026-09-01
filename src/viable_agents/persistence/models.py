@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import ForeignKey, Index, String, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from viable_agents.persistence.base import Base
 
@@ -62,6 +62,14 @@ class AgentRow(Base):
     budget_usd: Mapped[Decimal | None] = mapped_column(default=None)
     final_state: Mapped[str | None] = mapped_column(String(16), default=None)
 
+    # Gives the ORM flush an edge between the "agents" and "runs" mappers. Without
+    # it, a single flush containing both a new RunRow and a new AgentRow has no
+    # declared dependency between their mapper classes, so SQLAlchemy falls back
+    # to inserting per-table in an order that ignores the FK entirely (it happens
+    # to be alphabetical by table name) and can insert the child before its
+    # parent row exists, raising a foreign key violation.
+    run: Mapped[RunRow] = relationship()
+
 
 class MessageRow(Base):
     __tablename__ = "messages"
@@ -95,6 +103,10 @@ class MessageRow(Base):
     turn_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None)
     charter_version: Mapped[str | None] = mapped_column(String(32), default=None)
+
+    # See AgentRow.run: without this, a flush carrying both a new run and a new
+    # message can insert the message first and violate the FK.
+    run: Mapped[RunRow] = relationship()
 
     __table_args__ = (
         Index("ix_messages_run_seq", "run_id", "seq"),
@@ -135,6 +147,9 @@ class LLMCallRow(Base):
     ts_wall: Mapped[dt.datetime]
     ts_sim: Mapped[dt.datetime]
 
+    # See AgentRow.run.
+    run: Mapped[RunRow] = relationship()
+
     __table_args__ = (
         Index("ix_llm_calls_run_agent", "run_id", "agent_path"),
         Index("ix_llm_calls_turn", "turn_id"),
@@ -152,3 +167,6 @@ class ChannelSaturationRow(Base):
     ts_wall: Mapped[dt.datetime] = mapped_column(server_default=text("now()"))
     blocked_seconds: Mapped[float] = mapped_column(default=0.0)
     dropped_count: Mapped[int] = mapped_column(default=0)
+
+    # See AgentRow.run.
+    run: Mapped[RunRow] = relationship()
