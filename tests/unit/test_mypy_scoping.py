@@ -107,7 +107,7 @@ def test_strict_actually_scopes_to_the_kernel_when_mypy_runs(tmp_path: Path, ker
         f"[mypy]\npython_version = 3.12\nmypy_path = src\n\n[mypy-probe.kernel.*]\n{flags}\n"
     )
 
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         [
             sys.executable,
             "-m",

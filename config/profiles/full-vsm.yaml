@@ -1,0 +1,8 @@
+# A profile is the composition root: it names the topology, the fleet, and the
+# model overlay for one run. The Phase 9 ablation selects a profile and nothing
+# else, so the four arms differ only in config (hard rule 7).
+
+name: full-vsm
+topology: vsm
+fleet: vsm
+model_overlay: null      # metasystem runs on the sonnet tier

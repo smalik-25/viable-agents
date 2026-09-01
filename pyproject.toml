@@ -15,6 +15,16 @@ dependencies = [
     "pydantic>=2.13.4,<3",
     "pydantic-settings>=2.14.2,<3",
     "pyyaml>=6.0.3,<7",
+    # Persistence. Pinned <2.1 deliberately: 2.1 removes the (already unused)
+    # mypy plugin and changes ORM defaults, and must not land mid-project.
+    "sqlalchemy[asyncio]>=2.0.51,<2.1",
+    "asyncpg>=0.31.0,<0.32",
+    "alembic>=1.18.5,<2",
+    # Observability and the model client. The kernel imports none of these; they
+    # live behind Protocols in observability/ and llm/.
+    "langfuse>=4.14.1,<5",
+    "anthropic>=0.117.0,<1",
+    "typer>=0.27.0,<1",
 ]
 
 [project.scripts]
@@ -44,6 +54,10 @@ dev = [
     "pytest-asyncio>=1.4.0,<2",
     "pytest-cov>=7.1.0,<8",
     "types-pyyaml>=6.0.12,<7",
+    # Postgres for integration tests. The conftest falls back to DATABASE_URL,
+    # then a throwaway container, then skips, so `uv run pytest` is green on a
+    # laptop with Docker stopped.
+    "testcontainers[postgres]>=4.14.2,<5",
 ]
 
 # ---------------------------------------------------------------------------
@@ -78,8 +92,14 @@ ignore = [
 # which the Phase 6 escalation timers depend on.
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ANN", "PLR2004", "SLF001", "INP001"]
+# PLC0415: fixtures lazy-import heavy deps (testcontainers, alembic, sqlalchemy)
+# so a non-db test run never imports them.
+"tests/**" = ["S101", "ANN", "PLR2004", "SLF001", "INP001", "PLC0415", "S603", "S607"]
 "migrations/**" = ["INP001", "ANN"]
+# Protocol methods and the no-op tracers name their interface arguments but do not
+# use them; that is what a null object is.
+"src/viable_agents/kernel/tracing.py" = ["ARG002"]
+"src/viable_agents/observability/tracer.py" = ["ARG002"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["viable_agents"]
@@ -116,6 +136,12 @@ warn_return_any = true
 implicit_reexport = false
 strict_equality = true
 extra_checks = true
+
+# Third-party packages that ship no py.typed marker. Scoped overrides, not a
+# global ignore, so a missing stub anywhere else still surfaces.
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "asyncpg.*"]
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # pytest

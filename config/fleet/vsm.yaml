@@ -1,0 +1,42 @@
+# The full-VSM roster: which agent instances exist, and where CI events enter.
+#
+# A routing matrix says who MAY talk to whom; it cannot say which agents exist or
+# where events land. Three of the four Phase 9 arms differ in exactly those two
+# things, which is why this file exists alongside config/topology/. The Phase 1
+# demo instantiates a subset of this roster (an S3 and an S1) to exchange messages.
+
+name: vsm
+scope: [fleet]          # the recursion scope these agents live in (level 0)
+ingress:
+  role: s1              # CI events enter the fleet at operations
+agents:
+  - path: [fleet, build_triage_0]
+    role: s1
+    agent_type: BuildTriageAgent
+    model_tier: haiku
+    budget_usd: "0.24"
+  - path: [fleet, coordinator_0]
+    role: s2
+    agent_type: Coordinator
+    model_tier: none
+    budget_usd: "0.00"
+  - path: [fleet, controller_0]
+    role: s3
+    agent_type: Controller
+    model_tier: sonnet
+    budget_usd: "0.14"
+  - path: [fleet, auditor_0]
+    role: s3star
+    agent_type: PosiwidAuditor
+    model_tier: sonnet
+    budget_usd: "0.11"
+  - path: [fleet, intel_0]
+    role: s4
+    agent_type: IntelAgent
+    model_tier: sonnet
+    budget_usd: "0.07"
+  - path: [fleet, policy_0]
+    role: s5
+    agent_type: PolicyAgent
+    model_tier: sonnet
+    budget_usd: "0.11"

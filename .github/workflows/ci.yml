@@ -38,6 +38,9 @@ jobs:
         run: uv run ruff format --check --diff .
       - name: mypy
         run: uv run mypy
+      # Hard rule 2: the kernel stays under 1,500 non-blank non-comment lines.
+      - name: kernel budget
+        run: make kernel-budget
 
   test:
     runs-on: ubuntu-latest
@@ -45,6 +48,19 @@ jobs:
       # Ordering-sensitive code must not depend on set iteration order, and the
       # Phase 9 claim is that runs reproduce from seeds.
       PYTHONHASHSEED: "0"
+      # Postgres is the system of record; the integration tests write and read it.
+      DATABASE_URL: postgresql+asyncpg://viable:viable@localhost:5432/viable_test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: viable
+          POSTGRES_PASSWORD: viable
+          POSTGRES_DB: viable_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U viable -d viable_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -54,11 +70,19 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
 
-      # No secrets and no live API calls, ever. Tests that touch a real API
-      # carry the `live` marker and are deselected here.
+      # `alembic upgrade head` from an empty database is itself under test.
+      - name: migrate
+        run: uv run alembic upgrade head
+
+      # No secrets and no live API calls, ever. Tests that touch a real API carry
+      # the `live` marker and are deselected here; the `db` tests run against the
+      # service container above.
       - name: pytest
         run: uv run pytest -m "not live"
 
-  # Phase 1 adds a `postgres:16` service container with DATABASE_URL, an
-  # `alembic upgrade head` step, a `make kernel-budget` step, and an assertion
-  # that the db-marked suite actually ran rather than skipping.
+      # Prove the db-marked suite actually ran rather than silently skipping, so
+      # "rows in Postgres" is a verified claim and not an absent one.
+      - name: assert db tests ran
+        run: |
+          uv run pytest -m "db" --co -q | grep -q "test_" \
+            && echo "db tests collected" || (echo "no db tests collected" && exit 1)

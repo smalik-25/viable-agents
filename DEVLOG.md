@@ -2,6 +2,68 @@
 
 Running log of what changed and why. Newest first.
 
+## 2026-07-21 - Phase 1: the kernel, persistence, and a self-verifying demo
+
+Built the smallest thing that is recognizably a VSM substrate. The kernel is 12
+modules at 1,173 non-blank non-comment lines (`make kernel-budget`, ceiling 1,500,
+warn 1,200), `mypy --strict` clean via the 12 explicit per-module flags, ruff
+clean, and it imports nothing heavier than Pydantic. `tests/unit/test_kernel_imports.py`
+enforces all three: no banned import (SQLAlchemy, Langfuse, OpenTelemetry,
+Anthropic, PyYAML, LangChain, LangGraph) reaches the kernel graph, no ambient
+`datetime.now`/`asyncio.sleep` lives outside `clock.py`, and the file manifest is
+exact.
+
+What the kernel carries that a generic message bus would not:
+
+- **The topology is data and total.** `config/topology/vsm.yaml` and `flat.yaml`
+  load into one `Topology` class. Every one of the 500 (sender, recipient,
+  channel) cells resolves to a named rule, never an implicit default, so the
+  flat-vs-VSM ablation is a diff you can read: 39 cells differ. Authorization is
+  scoped by intent, which is how an S1 reports `accountability` upward on COMMAND
+  while the catch-all still forbids it from sending `intervention`.
+- **The routing-matrix test proves enforcement, not just the rules.** Beyond the
+  four layers over the YAML (totality, reachability, a golden table, the named
+  CLAUDE.md invariants), `tests/unit/test_bus.py` drives `Bus.send()` and shows it
+  follows whichever topology it was handed: the same worker-to-dispatcher send is
+  allowed under `flat` and raises under `vsm`. A bus that hardcoded the VSM rules
+  in Python would fail that test.
+- **Recursion is not precluded.** Addresses are path-shaped (`fleet/build_triage_0`)
+  with a derived level, and the algedonic recipient resolves as "the metasystem of
+  the sender's enclosing recursion" rather than a hardcoded S5, so Phase 6's
+  escalation ladder becomes a loop, not a special case.
+- **Cost lands on an `llm_calls` row, not the Envelope**, because one turn makes
+  0..N model calls and emits 0..N envelopes. The `ScriptedLLMClient` returns
+  priced fake responses so cost accounting runs end to end with no API key; the
+  real Anthropic client is a thin wrapper reached only by the `live` test.
+- **Postgres is the system of record.** Five tables (`runs`, `agents`, `messages`,
+  `llm_calls`, `channel_saturation`) carry the columns that cannot be backfilled:
+  `runs.seed` and `config_fingerprint`, `messages.causation_id` and
+  `status`/`reject_reason`/`rule_id`, the five separate token counts. Langfuse is a
+  best-effort viewer behind a Protocol; when keys are absent the tracer is a no-op
+  and everything still runs, which is how CI and the eval harness operate.
+
+The demo (`uv run viable-agents demo --verify`) starts an S1 (pure code) and an S3
+(LLM) over the bus, drives a message both ways on COMMAND, fires the algedonic
+bypass to the S5 seat, provokes a topology violation, and asserts all nine of
+those happened, exiting non-zero if any did not.
+
+Notes for the reviewer:
+
+- The initial Alembic migration builds the schema from the declarative metadata
+  (`create_all`) rather than rendered per-column DDL. It is exact by construction,
+  so the "no pending migrations" test finds no drift; later phases use explicit
+  `op` operations.
+- `python-preference = "only-managed"` and the recurring editable-install rebuild
+  meant the venv occasionally needed `uv sync --reinstall-package viable-agents`.
+
+Not yet verified:
+
+- The `live` Anthropic path and a real Langfuse trace: both are exercised only by
+  a keyed local run. `uv run pytest -m live` and one `demo --verify` with keys gate
+  the v0.1 tag; that run's trace URL goes here when it happens.
+- Postgres integration tests run only where a database exists (CI service
+  container, or local `docker compose up`); they skip cleanly otherwise.
+
 ## 2026-07-21 - Phase 0: repo bootstrap, and nine corrections to the plan before writing code
 
 Scaffolded the repo: `uv` project on Python 3.12 with a src layout, ruff, mypy,

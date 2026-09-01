@@ -1,0 +1,54 @@
+# The flat-orchestrator arm of the Phase 9 ablation, in the identical schema.
+#
+# This is what makes hard rule 7 literally true: the flat and VSM arms are two
+# files loaded into one Topology class, differing only in data. The flat fleet
+# has a different population (a single DISPATCHER over WORKERs, no S2/S3*/S4/S5)
+# and three channels turned off, not merely different edges. That the roster
+# differs is why config/fleet/*.yaml exists alongside this file.
+
+name: flat
+version: 1
+default_effect: deny
+
+channels:
+  command:
+    enabled: true
+    maxsize: 256
+    overflow: block
+    allowed_intents: [policy, allocation, intervention, accountability, pause, resume]
+  # The VSM-specific channels are switched off, not deleted, so the ablation diff
+  # shows exactly which coordination the flat arm lacks.
+  coordination:
+    enabled: false
+    maxsize: 256
+    overflow: block
+    allowed_intents: [claim, release, arbitrate, lateral, homeostat]
+  audit:
+    enabled: false
+    maxsize: 64
+    overflow: block
+    allowed_intents: [sample_request, finding, charter_diff]
+  algedonic:
+    enabled: false
+    maxsize: 0
+    overflow: drop_newest
+    allowed_intents: [pain, pleasure, ack, resolve]
+  environment:
+    enabled: true
+    maxsize: 1024
+    overflow: drop_oldest
+    allowed_intents: [observation, forecast]
+
+rules:
+  - {id: default_deny, sender: "*", recipient: "*", channel: "*", effect: deny,
+     reason: "not on the flat map"}
+  - {id: flat_dispatch, sender: dispatcher, recipient: worker, channel: command, intent: allocation,
+     effect: allow, reason: "the single dispatcher assigns work"}
+  - {id: flat_intervene, sender: dispatcher, recipient: worker, channel: command, intent: intervention,
+     effect: allow, reason: "the dispatcher redirects a worker"}
+  - {id: flat_report, sender: worker, recipient: dispatcher, channel: command, intent: accountability,
+     effect: allow, reason: "workers report back to the dispatcher"}
+  - {id: flat_env_in, sender: environment, recipient: dispatcher, channel: environment, intent: observation,
+     effect: allow, reason: "CI events enter at the dispatcher (the flat ingress)"}
+  - {id: flat_env_worker, sender: environment, recipient: worker, channel: environment, intent: observation,
+     effect: allow, reason: "workers also observe the environment"}
