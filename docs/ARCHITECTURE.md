@@ -147,6 +147,44 @@ context a real call would -- so the synthetic arm's reproducibility (`PYTHONHASH
 seeded event streams) is not undone by a nondeterministic model call sitting
 in the middle of it; `--live-llm` opts into the real Anthropic client per run.
 
+## S2 anti-oscillation: the work-claim ledger
+
+Beer's most under-appreciated system, and the cheapest: coordination damps
+oscillation between S1 units with no model call, because a work-claim ledger is a
+variety attenuator that code attenuates more cheaply than tokens. The concrete
+failure it exists to prevent is horizontal, not hierarchical -- `env_in_s1` fans a
+CI event out to every agent registered under the S1 role by design (so a fleet
+can scale a worker type out for throughput), and two instances of the same type
+both classifying and reporting the same workflow run is duplicate work reaching
+S3 twice, not two units doing their jobs.
+
+`BuildTriageAgent` claims a `(run key, work type)` pair through `Coordinator`
+before classifying, and releases it once it reports: `S1 -> S2` `claim`, `S2 ->
+S1` `arbitrate`, `S1 -> S2` `release` (`config/topology/vsm.yaml`'s
+`coord_s1_s2_claim`, `coord_s2_s1_arbitrate` and `coord_s1_s2_release` rules,
+unchanged since Phase 1). The claim is fire-and-forget rather than a blocking
+call: an agent's inbox is a single FIFO queue drained one envelope per `handle()`
+call, so blocking mid-turn for a reply would either stall on messages that arrive
+after it or corrupt delivery order for whatever else lands in between. The agent
+stashes the causing envelope and returns; the `ARBITRATE` reply is a later,
+independent `handle()` call that resumes the stashed work if granted, or
+discards it if denied. `WorkClaimLedger` (`systems/s2/ledger.py`) is first-claim-
+wins, pure code, and keyed by `(run key, work type)` rather than run key alone,
+so a `BuildTriageAgent` and a `FlakeAgent` processing the same run never contend
+-- they are not duplicating each other's work, only two same-typed instances are.
+A claim older than a TTL with no matching release is reclaimable, so a degraded
+S1 that dies mid-run does not strand a workflow run unclaimed forever.
+
+The table above flags the real risk with this channel's collapse: a thrash test
+built around client-side coordination could pass because the S1s "sorted it out
+themselves" rather than because S2 damped anything. `tests/unit/test_s2_coordination.py`
+avoids that by construction -- every test routes a claim through a real
+`Coordinator.handle()` call and inspects its `decisions` directly, so a pass is
+never attributable to anything but the coordinator actually mediating. The first
+test in that file demonstrates the failure with coordination switched off
+(`BuildTriageAgent(coordinate=False)`, Phase 2's original, unmediated behavior)
+before the fix exists to remove it, per CLAUDE.md hard rule 8.
+
 ## Storage
 
 Postgres is the system of record. Langfuse is a viewer. Every envelope and every
@@ -167,4 +205,8 @@ for the tables of record. The two-agent walk-through is
 [sources/github.py](../src/viable_agents/sources/github.py) and
 [simulator/generator.py](../src/viable_agents/simulator/generator.py), and the
 three S1 workers are under
-[systems/s1/](../src/viable_agents/systems/s1/).
+[systems/s1/](../src/viable_agents/systems/s1/). The Phase 3 work-claim ledger
+and coordinator are [systems/s2/ledger.py](../src/viable_agents/systems/s2/ledger.py)
+and [systems/s2/coordinator.py](../src/viable_agents/systems/s2/coordinator.py);
+the thrash test is
+[tests/unit/test_s2_coordination.py](../tests/unit/test_s2_coordination.py).

@@ -16,16 +16,20 @@ agents triage failing builds, classify flaky tests, and summarise dependency
 bumps, against either live public repositories (read-only) or a seeded simulator
 with ground-truth failure labels.
 
-Status: Phase 2. The kernel runs (a data-driven routing matrix, 500 cells total,
+Status: Phase 3. The kernel runs (a data-driven routing matrix, 500 cells total,
 39 differing between the flat and full-VSM arms; a bus that enforces whichever
 topology it is handed; path-shaped recursion-safe addresses; a dual clock;
 Postgres persistence behind Alembic migrations), and real work happens on top of
 it: a seeded synthetic CI simulator that doubles as eval ground truth, a
 read-only GitHub live adapter, and three S1 agents (build triage, flake
 detection, dependency-bump summaries) that cannot tell which source an event
-came from. `uv run viable-agents run --source synthetic --events 500 --verify`
-is self-checking the way the Phase 1 demo is. The kernel is 1,165 lines,
-`mypy --strict` clean, and imports nothing heavier than Pydantic.
+came from. `BuildTriageAgent` now claims a run through S2's `Coordinator`
+before classifying and releases it once it reports, so two instances of the
+same worker type racing the same workflow run do not both report it -- a
+work-claim ledger, pure code, no model call. `uv run viable-agents run
+--source synthetic --events 500 --verify` is self-checking the way the Phase 1
+demo is. The kernel is 1,165 lines, `mypy --strict` clean, and imports nothing
+heavier than Pydantic.
 
 ## Why this and not a graph framework
 
@@ -94,7 +98,7 @@ free and deterministic.
 - [x] Phase 0: repo bootstrap, CI, architecture stub
 - [x] Phase 1: kernel (envelope, bus, agent base, routing matrix, persistence)
 - [x] Phase 2: CI event sources, three S1 worker types
-- [ ] Phase 3: S2 coordination, the anti-oscillation test
+- [x] Phase 3: S2 coordination, the anti-oscillation test
 - [ ] Phase 4: S3 control, budget allocation
 - [ ] Phase 5: S5 policy, charter, human channel
 - [ ] Phase 6: algedonic bus, failure injection, time-to-detection

@@ -6,6 +6,13 @@ test asserts exactly one causally-linked ``COMMAND``/``accountability`` envelope
 landed on the S3 seat without needing to drain a task. ``BuildTriageAgent`` is the
 one PLAN Phase 2 asks to be spot-checked against ground truth; that check lives in
 ``test_run.py`` where the full synthetic stream is available.
+
+Phase 3 makes ``BuildTriageAgent`` coordinate through S2 by default
+(``coordinate=True``), so its tests now drive the real claim/arbitrate round trip
+via ``_process`` rather than a single ``handle()`` call -- this exercises the exact
+path ``run.py`` uses, not a stand-in. ``tests/unit/test_s2_coordination.py`` covers
+the coordination mechanism itself (contention, denial, the ledger); these tests
+stay about what they were about in Phase 2: verdict shape, evidence, retry.
 """
 
 from __future__ import annotations
@@ -51,10 +58,12 @@ from viable_agents.systems.s1 import (
     scripted_dep_responder,
     scripted_triage_responder,
 )
+from viable_agents.systems.s2 import Coordinator
 
 CONFIG = Path(__file__).resolve().parents[2] / "config"
 FLEET = ("fleet",)
 S1_ADDR = AgentAddress(path=("fleet", "s1_under_test"), role=Role.S1)
+S2_ADDR = AgentAddress(path=("fleet", "coordinator_0"), role=Role.S2)
 S3_ADDR = AgentAddress(path=("fleet", "controller_0"), role=Role.S3)
 ENV_ADDR = AgentAddress(path=("fleet", "env_0"), role=Role.ENVIRONMENT)
 _NOW = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
@@ -64,8 +73,20 @@ def _bus() -> Bus:
     topology = load_topology(CONFIG / "topology" / "vsm.yaml")
     bus = Bus(topology=topology, clock=RealClock(), sink=InMemorySink(), run_id=uuid.uuid4())
     bus.register(S1_ADDR)
+    bus.register(S2_ADDR)
     bus.register(S3_ADDR)
     return bus
+
+
+async def _process(agent: BuildTriageAgent, bus: Bus, observation: Envelope) -> None:
+    """Drive one event through ``BuildTriageAgent``'s real, default
+    (``coordinate=True``) protocol: claim, a real ``Coordinator`` arbitrates, then
+    the agent resumes and reports. Mirrors what ``run.py`` does with its own
+    running ``Coordinator`` agent, just stepped by hand."""
+    await agent.handle(observation)
+    coordinator = Coordinator(address=S2_ADDR, bus=bus, clock=RealClock(), tracer=NullTracer())
+    await coordinator.handle(await bus.receive(S2_ADDR))
+    await agent.handle(await bus.receive(S1_ADDR))
 
 
 def _observation(event: CIEvent, *, run_id: uuid.UUID) -> Envelope:
@@ -145,7 +166,7 @@ async def test_build_triage_agent_reports_a_cited_regression_verdict() -> None:
     )
     event = _regression_event()
     observation = _observation(event, run_id=run_id)
-    await agent.handle(observation)
+    await _process(agent, bus, observation)
 
     assert len(agent.verdicts) == 1
     verdict = agent.verdicts[0]
@@ -201,7 +222,7 @@ async def test_retry_on_invalid_structured_output_then_succeeds() -> None:
         model_tier="haiku",
         fleet_scope=FLEET,
     )
-    await agent.handle(_observation(_regression_event(), run_id=run_id))
+    await _process(agent, bus, _observation(_regression_event(), run_id=run_id))
     assert len(calls) == 2, "the first attempt should have failed validation and been retried"
     assert len(agent.verdicts) == 1
 
