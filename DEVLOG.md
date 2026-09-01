@@ -2,6 +2,25 @@
 
 Running log of what changed and why. Newest first.
 
+## 2026-09-01 - Phase 2 hardening: migration 0001 was silently absorbing later tables
+
+CI failed `alembic upgrade head` from an empty database with
+`DuplicateTableError: relation "github_cache" already exists`. Cause: migration
+0001's `Base.metadata.create_all(bind=op.get_bind())` was unqualified, and
+`Base.metadata` is a live registry of every model currently imported, not a
+snapshot of what existed when the revision was written. Once `GitHubCacheRow`
+was added to `models.py` for 0002, 0001's `create_all()` started creating
+`github_cache` too, and 0002's own explicit `op.create_table("github_cache",
+...)` then collided with it on any fresh database. Fix: 0001 now passes
+`tables=[Base.metadata.tables[name] for name in _TABLES]` naming exactly the
+five original tables (`runs`, `agents`, `messages`, `llm_calls`,
+`channel_saturation`), so its output is fixed regardless of what gets added to
+`models.py` later. Verified by dropping to a genuinely empty database
+(`docker exec ... createdb migration_check`) and re-running `alembic upgrade
+head` clean, then the full suite: 584 passed against real Postgres, including
+`test_persistence.py`'s `compare_metadata` drift check and
+`test_github_cache.py`.
+
 ## 2026-08-31 - Phase 2: CI event sources and the three S1 workers
 
 Real work happening: a seeded synthetic CI simulator that doubles as eval ground
