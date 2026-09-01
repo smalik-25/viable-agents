@@ -81,6 +81,8 @@ class BuildTriageAgent(S1Worker):
         self.coordinate = coordinate
 
     async def handle(self, env: Envelope) -> None:
+        if await self._handle_control(env):
+            return
         if env.channel is Channel.COORDINATION and env.intent is Intent.ARBITRATE:
             await self._on_arbitrate(env)
             return

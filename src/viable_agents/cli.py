@@ -39,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--postgres", action="store_true", help="write rows to Postgres")
     run.add_argument(
+        "--starved-budget",
+        action="store_true",
+        help="use config/budgets.yaml's starved_run_budget_usd pool instead of the default, "
+        "so S3 sheds low-priority S1 work under pressure",
+    )
+    run.add_argument(
         "--verify",
         action="store_true",
         help="assert the exit criteria and return non-zero if any fails",
@@ -62,6 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scenario=args.scenario,
             live_llm=args.live_llm,
             postgres=args.postgres,
+            starved_budget=args.starved_budget,
             verify=args.verify,
         )
     parser.print_help()

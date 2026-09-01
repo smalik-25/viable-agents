@@ -2,6 +2,108 @@
 
 Running log of what changed and why. Newest first.
 
+## 2026-09-01 - Phase 4: S3 control, the resource bargain
+
+`Controller` now owns the per-run budget: hard per-agent caps are enforced for
+the first time (they existed as unread stubs since Phase 0), a running-pool
+monitor sheds low-priority S1 work under pressure and resumes it when headroom
+returns, and a periodic `RunReport` -- work done, cost, anomaly counts per
+agent, plus a one-sentence narrative -- lands in Postgres. Every COMMAND rule
+this needed (`cmd_s3_s1_alloc/intervene/pause/resume`, `cmd_s1_s3_account`) was
+already reserved in `config/topology/vsm.yaml` since Phase 1; no topology
+change landed with this phase, same as Phase 3.
+
+**Budget enforcement is client-level, not bus-level**, correcting a claim
+`kernel/bus.py`'s `add_pre_send` docstring had carried since Phase 0/1: an LLM
+call is `self.llm.complete(...)`, called directly by an agent on its client,
+and never crosses `Bus.send()`, so a bus seam cannot see it. `BudgetGuard`
+(`llm/budget.py`) lives where the spend happens instead, checked once per
+retry ATTEMPT inside `ScriptedLLMClient`/`AnthropicLLMClient`'s existing
+retry-on-invalid loop, not once per `complete()` call -- a check only at the
+top would let a validation retry cross the cap unrefused, since each attempt
+already records its own full-cost `llm_calls` row. A refusal still writes a
+`$0`, `succeeded=False`, `error="budget_exceeded"` row before raising, so a
+refusal is data (hard rule 3), not only an exception. `project_ceiling_usd`
+is enforced the same way, scoped run-local for now (cross-run needs a
+Postgres query at run start the in-memory synthetic path cannot perform;
+parked in `PLAN.md`).
+
+**Allocation is a running-pool monitor, not a one-shot grant**, because the
+shipped `starved_run_budget_usd` (0.24) exactly equals the S1 `budget_usd`
+sum in `config/fleet/vsm.yaml` (0.15 + 0.09 + 0.00) -- a one-time
+"grant-each-instance-its-nominal-ask" allocator would shed nobody on that
+exact break-even. Instead `Controller` tracks cumulative spend (read from the
+same `BudgetGuard` the LLM clients write to, one ledger, not two) against the
+pool on every accountability report and pauses the lowest-priority live S1
+once the pool is spent. This surfaced a real bug during testing: because
+cumulative spend never refunds, comparing it against a fixed pool on every
+single report re-triggered a shed on every subsequent report too, cascading
+through the whole roster instead of shedding once. Fixed with an arm/disarm
+flag: a shed disarms itself and only re-arms on a resume, so at most one shed
+responds to each distinct overage. Caught by
+`test_resume_when_a_running_agent_becomes_permanently_exhausted` before it
+shipped.
+
+**Resume fires on permanent exhaustion, not on spend "coming back down"**
+(it structurally can't -- cumulative spend is monotonic). When a running
+agent hits its OWN `BudgetGuard` cap, it can never spend another dollar this
+run, which is the only real headroom signal available; `Controller` resumes
+the highest-priority paused agent at that point. This exercises `Agent.pause()`
+/`resume()` (implemented since Phase 1, never called by anything before this)
+via genuine budget headroom, not an invented performance metric -- PLAN.md's
+"reprioritizes when an S1 underperforms" needs a quality signal no
+accountability payload carries today, so that stays out of scope and is
+parked rather than guessed at.
+
+S1 gained pause/resume dispatch it did not have at all: `S1Worker.
+_handle_control` consumes COMMAND/pause and COMMAND/resume, called first by
+every concrete `handle()` (`triage.py`, `flake.py`, `dep.py`). Without it
+`Controller`'s directives would have silently dropped -- confirmed missing by
+grepping for `PAUSE`/`RESUME` across `systems/s1/` before writing it.
+
+`priority: int` is new on `AgentSpec`/`config/fleet/vsm.yaml`: S1 workers get
+the lowest values (only they are actually shed), and the metasystem seats get
+placeholder values reflecting Beer's hierarchy ahead of their own phases
+instantiating them. Controller's own Sonnet-tier call is the RunReport
+narrative only -- the allocation decision itself stays deterministic, the
+same "code attenuates cheaper than tokens" argument Phase 3's S2 module
+docstring makes, extended here because budget enforcement should not be an
+LLM's call. A narrative-drafting failure (budget exceeded, invalid structured
+output) falls back to an empty string rather than raising, so the agent
+responsible for preventing degradation cannot degrade itself over prose.
+
+Ran into and fixed a real circular import while wiring this up:
+`persistence` (via `llm.recorder`) pulled in `persistence.run_reports`,
+which imported `systems.s3.reports` for a type hint -- but importing that
+submodule triggers `systems/s3/__init__.py`, which eagerly loads
+`controller.py`, which imports from `llm.client`, still mid-initialization
+from the top of the same chain. Fixed by moving that import under
+`TYPE_CHECKING`: `RunReportRecord` only ever holds an already-constructed
+`RunReport`, so the real class is never needed at runtime, only the
+annotation.
+
+A worthwhile side effect of enforcement finally being real: the DEFAULT
+(non-starved) 500-event run's numbers changed from Phase 2/3's baseline (171
+triage verdicts, $0.4664) to 69 verdicts and $0.2618, because `build_triage_0`'s
+own `budget_usd` cap ($0.15) -- inert since Phase 0 -- now genuinely refuses
+further calls once hit, independent of and before Controller's pool ever
+gets involved (no agent was paused in that run; the pool, $0.60, was nowhere
+near spent). Not a regression: every exit check still passes, agreement is
+still 100% on what did get classified, and it is exactly what "hard per-agent
+caps... an over-budget agent's LLM calls are refused" asks for. The starved
+run (`--starved-budget`) separately and additionally pauses `flake_0`
+(lowest priority, $0 cap) via the pool monitor.
+
+7 new files (`llm/budget.py`, `llm/budgets_config.py`, `systems/s3/reports.py`,
+`systems/s3/controller.py`, `systems/s3/scripting.py`,
+`persistence/run_reports.py`, `migrations/versions/0003_run_reports.py`) plus
+tests (`test_budget_guard.py`, `test_s3_controller.py`,
+`tests/integration/test_run_reports.py`, a starved-budget scenario added to
+`test_run.py`). Full suite: 609 passed against real Postgres, `ruff`/
+`ruff format`/`mypy --strict` all clean, kernel at 1,182/1,500 lines (up 17
+from `BudgetExceededError`'s new fields and a corrected docstring -- no
+kernel behavior changed, only a typed error and an accurate comment).
+
 ## 2026-09-01 - Phase 3: S2 coordination, the anti-oscillation test
 
 `BuildTriageAgent` now claims a `(run key, work type)` pair from `Coordinator`

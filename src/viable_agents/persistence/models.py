@@ -175,6 +175,33 @@ class GitHubCacheRow(Base):
     fetched_at: Mapped[dt.datetime] = mapped_column(server_default=text("now()"))
 
 
+class RunReportRow(Base):
+    """S3's periodic accountability snapshot (Phase 4): work done, cost, and
+    anomaly counts per agent at one point in a run. What Phase 7's POSIWID
+    auditor will read to diff observed behavior against a stated charter, once
+    one exists.
+    """
+
+    __tablename__ = "run_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.run_id"))
+    # Monotonic per run, like MessageRow.seq: replay ordering is deterministic
+    # rather than dependent on a database sequence.
+    seq: Mapped[int]
+    ts_wall: Mapped[dt.datetime]
+    ts_sim: Mapped[dt.datetime]
+    per_agent: Mapped[dict[str, Any]]
+    total_cost_usd: Mapped[Decimal]
+    total_anomalies: Mapped[int]
+    narrative: Mapped[str] = mapped_column(String(1024), default="")
+
+    # See AgentRow.run.
+    run: Mapped[RunRow] = relationship()
+
+    __table_args__ = (Index("ix_run_reports_run_seq", "run_id", "seq"),)
+
+
 class ChannelSaturationRow(Base):
     """Beer's Principle 2 made measurable: the metric a generic orchestrator omits."""
 

@@ -50,6 +50,8 @@ class DepAgent(S1Worker):
         self.summaries: list[DepSummary] = []
 
     async def handle(self, env: Envelope) -> None:
+        if await self._handle_control(env):
+            return
         if env.channel is not Channel.ENVIRONMENT or env.intent is not Intent.OBSERVATION:
             return
         event = env.payload.narrow(CIEvent)

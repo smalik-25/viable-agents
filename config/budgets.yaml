@@ -1,7 +1,7 @@
 # Budgets. S3 allocates against these; the algedonic cost-runaway detector fires
 # against the burn rate derived from them.
 #
-# STUB. Phase 4 activates the allocator, Phase 6 the detector.
+# Phase 4 activates the allocator, Phase 6 the detector.
 #
 # These numbers are chosen so the FEATURES are demonstrable. A per-run budget far
 # above the measured cost means S3 rubber-stamps and the cost detector never
@@ -14,6 +14,10 @@
 
 default_run_budget_usd: "0.60"
 
+# Per-ROLE reference lines, not per-instance hard caps -- the actual hard,
+# per-agent-INSTANCE stop BudgetGuard enforces (llm/budget.py) comes from each
+# agent's own `budget_usd` in config/fleet/vsm.yaml, which is built to sum to
+# the matching role line here (e.g. the three S1 instances sum to 0.24).
 per_agent_caps_usd:
   s1: "0.24"
   s3: "0.14"
@@ -23,7 +27,16 @@ per_agent_caps_usd:
   # sums to 0.67 against a 0.60 pool
 
 # The named Phase 4 graceful-degradation scenario: S3 must shed low-priority
-# work rather than crash.
+# work rather than crash. Note this equals the S1 per-role line above, so a
+# ONE-SHOT start-of-run allocation (grant each instance its nominal ask until
+# the pool runs out) would shed nobody -- an exact break-even. Controller
+# therefore does not allocate once at run start; it tracks cumulative spend
+# against this pool on every accountability report and pauses the
+# lowest-priority live S1 once remaining pool can no longer cover projected
+# demand (and resumes the highest-priority paused one when headroom returns).
+# This is what gives "sheds low-priority work" its literal meaning -- a
+# running worker gets cut off -- and stays correct regardless of how these
+# numbers get edited later.
 starved_run_budget_usd: "0.24"
 
 # Phase 6 cost-runaway detector. A RATE threshold over a sliding window, not a
@@ -34,7 +47,10 @@ cost_runaway:
   window_events: 20
   warmup_events: 15
 
-# Hard ceilings. The project cap is enforced by the metered client, which refuses
-# a call that would cross it, so a runaway loop cannot quietly spend a month's
-# budget overnight.
+# Hard ceiling, enforced RUN-LOCAL for Phase 4: BudgetGuard refuses a call once
+# cumulative spend within the CURRENT run reaches this, a real runaway-loop
+# guard. True cross-run enforcement (summing historical llm_calls.cost_usd at
+# run start so a month's worth of runs cannot quietly exceed it) needs a
+# Postgres query the in-memory/synthetic default path structurally cannot
+# perform, and is parked -- see PLAN.md's parking lot.
 project_ceiling_usd: "50.00"

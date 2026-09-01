@@ -42,12 +42,17 @@ from viable_agents.kernel import (
     Role,
 )
 from viable_agents.kernel.address import AgentAddress, RoleAddress
+from viable_agents.llm.budget import BudgetGuard
+from viable_agents.llm.budgets_config import load_budgets
 from viable_agents.llm.client import ScriptedLLMClient
 from viable_agents.llm.recorder import CallRecorder, InMemoryCallRecorder
 from viable_agents.observability import build_tracer
 from viable_agents.persistence import (
+    InMemoryRunReportRecorder,
     InMemorySink,
+    PostgresRunReportRecorder,
     PostgresSink,
+    RunReportRecorder,
     RunRow,
     make_engine,
     make_session_factory,
@@ -72,18 +77,25 @@ from viable_agents.systems.s1 import (
     scripted_triage_responder,
 )
 from viable_agents.systems.s2 import Coordinator
+from viable_agents.systems.s3 import (
+    Controller,
+    RosterEntry,
+    RunReportNarrative,
+    scripted_narrative_responder,
+)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 FLEET = ("fleet",)
 ENV_ADDR = AgentAddress(path=("fleet", "env_0"), role=Role.ENVIRONMENT)
 
-FleetAgent = BuildTriageAgent | FlakeAgent | DepAgent | Coordinator
+FleetAgent = BuildTriageAgent | FlakeAgent | DepAgent | Coordinator | Controller
 
 _AGENT_TYPES: dict[str, type[FleetAgent]] = {
     "BuildTriageAgent": BuildTriageAgent,
     "FlakeAgent": FlakeAgent,
     "DepAgent": DepAgent,
     "Coordinator": Coordinator,
+    "Controller": Controller,
 }
 
 _STABLE_IDLE_ROUNDS = 3
@@ -96,6 +108,8 @@ def _scripted_responder(output_model: type[Any], system: str, messages: Any) -> 
         return scripted_triage_responder(output_model, system, messages)
     if output_model is DepDraft:
         return scripted_dep_responder(output_model, system, messages)
+    if output_model is RunReportNarrative:
+        return scripted_narrative_responder(output_model, system, messages)
     msg = f"no scripted responder registered for {output_model.__name__}"
     raise NotImplementedError(msg)
 
@@ -108,6 +122,8 @@ class RunResult:
     dep_summaries: int = 0
     agreement: float | None = None  # synthetic only: fraction matching ground truth
     llm_cost: Decimal = Decimal("0")
+    run_reports: int = 0
+    paused_agents: tuple[str, ...] = ()
     checks: dict[str, bool] = field(default_factory=dict)
 
     @property
@@ -128,7 +144,13 @@ async def _drain(bus: Bus, addresses: list[AgentAddress]) -> None:
 
 
 def _build_llm(
-    *, live_llm: bool, models: Any, clock: RealClock, recorder: CallRecorder, run_id: uuid.UUID
+    *,
+    live_llm: bool,
+    models: Any,
+    clock: RealClock,
+    recorder: CallRecorder,
+    run_id: uuid.UUID,
+    budget: BudgetGuard,
 ) -> LLMClient:
     if not live_llm:
         return ScriptedLLMClient(
@@ -137,6 +159,7 @@ def _build_llm(
             recorder=recorder,
             run_id=run_id,
             responder=_scripted_responder,
+            budget=budget,
         )
     from anthropic import AsyncAnthropic  # noqa: PLC0415 - lazy: only import when --live-llm
 
@@ -152,6 +175,7 @@ def _build_llm(
         clock=clock,
         recorder=recorder,
         run_id=run_id,
+        budget=budget,
     )
 
 
@@ -181,12 +205,30 @@ async def _open_sink(
 
 
 def _build_agents(
-    config: Any, *, bus: Bus, clock: RealClock, tracer: Any, llm: LLMClient
+    config: Any,
+    *,
+    bus: Bus,
+    clock: RealClock,
+    tracer: Any,
+    llm: LLMClient,
+    budget_guard: BudgetGuard,
+    report_sink: RunReportRecorder,
+    pool_usd: Decimal,
 ) -> tuple[list[FleetAgent], list[AgentAddress]]:
     specs = [a for a in config.fleet.agents if a.agent_type in _AGENT_TYPES]
     addresses = [AgentAddress(path=spec.path, role=spec.role) for spec in specs]
     for addr in addresses:
         bus.register(addr)
+
+    s1_roster = [
+        RosterEntry(
+            address=AgentAddress(path=spec.path, role=spec.role),
+            priority=spec.priority,
+            cap_usd=spec.budget_usd,
+        )
+        for spec in specs
+        if spec.role is Role.S1
+    ]
 
     agents: list[FleetAgent] = []
     for spec, addr in zip(specs, addresses, strict=True):
@@ -200,6 +242,11 @@ def _build_agents(
         }
         if issubclass(cls, S1Worker):
             kwargs["fleet_scope"] = FLEET
+        if issubclass(cls, Controller):
+            kwargs["roster"] = s1_roster
+            kwargs["pool_usd"] = pool_usd
+            kwargs["budget_guard"] = budget_guard
+            kwargs["report_sink"] = report_sink
         if tier is not None:
             kwargs["llm"] = llm
             kwargs["model_tier"] = tier
@@ -260,11 +307,21 @@ async def _run(
     scenario_name: str,
     live_llm: bool,
     use_postgres: bool,
+    starved_budget: bool = False,
 ) -> RunResult:
     config = load_profile(CONFIG_DIR, "full-vsm")
     clock = RealClock()
     tracer = build_tracer()
     recorder: CallRecorder = InMemoryCallRecorder()
+    budgets = load_budgets(CONFIG_DIR / "budgets.yaml")
+    pool_usd = budgets.starved_run_budget_usd if starved_budget else budgets.default_run_budget_usd
+    per_agent_caps = {
+        AgentAddress(path=spec.path, role=spec.role).canonical(): spec.budget_usd
+        for spec in config.fleet.agents
+    }
+    budget_guard = BudgetGuard(
+        per_agent_caps_usd=per_agent_caps, project_ceiling_usd=budgets.project_ceiling_usd
+    )
 
     sink, session_factory = await _open_sink(
         use_postgres=use_postgres,
@@ -273,11 +330,30 @@ async def _run(
         source_mode=source_mode,
         config=config,
     )
+    report_sink: RunReportRecorder = (
+        PostgresRunReportRecorder(session_factory=session_factory)
+        if session_factory is not None
+        else InMemoryRunReportRecorder()
+    )
     llm = _build_llm(
-        live_llm=live_llm, models=config.models, clock=clock, recorder=recorder, run_id=run_id
+        live_llm=live_llm,
+        models=config.models,
+        clock=clock,
+        recorder=recorder,
+        run_id=run_id,
+        budget=budget_guard,
     )
     bus = Bus(topology=config.topology, clock=clock, sink=sink, run_id=run_id)
-    agents, addresses = _build_agents(config, bus=bus, clock=clock, tracer=tracer, llm=llm)
+    agents, addresses = _build_agents(
+        config,
+        bus=bus,
+        clock=clock,
+        tracer=tracer,
+        llm=llm,
+        budget_guard=budget_guard,
+        report_sink=report_sink,
+        pool_usd=pool_usd,
+    )
     source = _build_source(
         source_mode=source_mode,
         events=events,
@@ -288,6 +364,9 @@ async def _run(
     seen = await _stream_into(source, bus=bus, run_id=run_id, clock=clock)
 
     await _drain(bus, addresses)
+    controllers = [a for a in agents if isinstance(a, Controller)]
+    for controller in controllers:
+        await controller.emit_report(run_id=run_id)
     for agent in agents:
         await agent.stop()
     aclose = getattr(source, "aclose", None)
@@ -328,10 +407,13 @@ def _summarize(
         agreement = (agree / total) if total else None
 
     degraded = [a.address.canonical() for a in agents if a.state is AgentState.DEGRADED]
+    controllers = [a for a in agents if isinstance(a, Controller)]
+    run_report_count = sum(len(c.reports) for c in controllers)
+    paused_agents = tuple(sorted({p for c in controllers for p in c.paused}))
 
     checks = {
         "the stream produced at least one event": seen > 0,
-        "no S1 agent degraded": not degraded,
+        "no agent degraded (shedding is a pause, not a crash)": not degraded,
     }
     if source_mode == "synthetic":
         checks["triage verdicts were produced for the failing events"] = verdict_count > 0
@@ -340,6 +422,8 @@ def _summarize(
             checks[f"triage agreement with ground truth is at least {_MIN_AGREEMENT:.0%}"] = (
                 agreement >= _MIN_AGREEMENT
             )
+    if controllers:
+        checks["at least one RunReport landed"] = run_report_count > 0
 
     total_cost = (
         recorder.total_cost_usd() if isinstance(recorder, InMemoryCallRecorder) else Decimal("0")
@@ -351,6 +435,8 @@ def _summarize(
         dep_summaries=dep_count,
         agreement=agreement,
         llm_cost=total_cost,
+        run_reports=run_report_count,
+        paused_agents=paused_agents,
         checks=checks,
     )
 
@@ -362,6 +448,7 @@ def run_fleet(
     scenario: str,
     live_llm: bool,
     postgres: bool,
+    starved_budget: bool = False,
     verify: bool,
 ) -> int:
     run_id = uuid.uuid4()
@@ -373,6 +460,7 @@ def run_fleet(
             scenario_name=scenario,
             live_llm=live_llm,
             use_postgres=postgres,
+            starved_budget=starved_budget,
         )
     )
     print(f"viable-agents run  (run {run_id}, source={source})")  # noqa: T201
@@ -383,6 +471,9 @@ def run_fleet(
     if result.agreement is not None:
         print(f"  triage agreement vs ground truth: {result.agreement:.0%}")  # noqa: T201
     print(f"  LLM cost this run: ${result.llm_cost}")  # noqa: T201
+    print(f"  run reports emitted: {result.run_reports}")  # noqa: T201
+    if result.paused_agents:
+        print(f"  paused (budget-shed) agents: {', '.join(result.paused_agents)}")  # noqa: T201
     for label, passed in result.checks.items():
         mark = "PASS" if passed else "FAIL"
         print(f"  [{mark}] {label}")  # noqa: T201

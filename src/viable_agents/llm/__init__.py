@@ -8,11 +8,14 @@ test. Pricing and the model registry live here because they depend on
 ``config/models.yaml``, which the kernel does not read.
 """
 
+from viable_agents.llm.budget import BudgetGuard
+from viable_agents.llm.budgets_config import BudgetsConfig, CostRunawayConfig, load_budgets
 from viable_agents.llm.client import (
     MAX_STRUCTURED_OUTPUT_ATTEMPTS,
     LLMCall,
     ScriptedLLMClient,
     StructuredOutputError,
+    check_budget_or_refuse,
 )
 from viable_agents.llm.config import ModelsConfig, TierSpec, load_models
 from viable_agents.llm.pricing import NoPriceError, Price, cost_usd, price_for
@@ -20,7 +23,10 @@ from viable_agents.llm.recorder import CallRecorder, InMemoryCallRecorder
 
 __all__ = [
     "MAX_STRUCTURED_OUTPUT_ATTEMPTS",
+    "BudgetGuard",
+    "BudgetsConfig",
     "CallRecorder",
+    "CostRunawayConfig",
     "InMemoryCallRecorder",
     "LLMCall",
     "ModelsConfig",
@@ -29,7 +35,9 @@ __all__ = [
     "ScriptedLLMClient",
     "StructuredOutputError",
     "TierSpec",
+    "check_budget_or_refuse",
     "cost_usd",
+    "load_budgets",
     "load_models",
     "price_for",
 ]
