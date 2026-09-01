@@ -1,0 +1,26 @@
+# The flat-orchestrator roster. A single dispatcher over workers, no metasystem.
+#
+# CI events enter at the dispatcher, not at operations: that is the ingress
+# difference the topology matrix alone cannot express, and it is why the flat arm
+# is a different experiment rather than the VSM with looser edges.
+
+name: flat
+scope: [fleet]
+ingress:
+  role: dispatcher
+agents:
+  - path: [fleet, dispatcher_0]
+    role: dispatcher
+    agent_type: Dispatcher
+    model_tier: haiku
+    budget_usd: "0.30"
+  - path: [fleet, worker_0]
+    role: worker
+    agent_type: Worker
+    model_tier: haiku
+    budget_usd: "0.20"
+  - path: [fleet, worker_1]
+    role: worker
+    agent_type: Worker
+    model_tier: haiku
+    budget_usd: "0.20"

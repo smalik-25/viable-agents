@@ -131,5 +131,10 @@ algedonic detectors and the POSIWID auditor read a local database rather than a
 rate-limited SaaS API. Eval runs disable tracing by default.
 
 Code pointers: [kernel/channels.py](../src/viable_agents/kernel/channels.py) for
-the vocabulary, [config/topology/vsm.yaml](../config/topology/vsm.yaml) for the
-matrix itself.
+the vocabulary, [kernel/topology.py](../src/viable_agents/kernel/topology.py) for
+the matcher and [config/topology/vsm.yaml](../config/topology/vsm.yaml) for the
+matrix itself, [kernel/bus.py](../src/viable_agents/kernel/bus.py) for the router
+and its enforcement seams, [kernel/address.py](../src/viable_agents/kernel/address.py)
+for recursion-safe addressing, and [persistence/models.py](../src/viable_agents/persistence/models.py)
+for the tables of record. The two-agent walk-through is
+[demo.py](../src/viable_agents/demo.py).

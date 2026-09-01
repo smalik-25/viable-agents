@@ -1,0 +1,8 @@
+# The flat-cheap ablation arm: a single dispatcher over workers, all on the cheap
+# tier. Phase 9 also runs a flat-tiered variant (sonnet dispatcher) so a reader
+# can separate the topology effect from the tiering effect.
+
+name: flat
+topology: flat
+fleet: flat
+model_overlay: cheap

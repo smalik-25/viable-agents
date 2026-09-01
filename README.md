@@ -16,7 +16,12 @@ agents triage failing builds, classify flaky tests, and summarise dependency
 bumps, against either live public repositories (read-only) or a seeded simulator
 with ground-truth failure labels.
 
-Status: Phase 0. Repo bootstrap and CI only. Nothing runs yet.
+Status: Phase 1. The kernel runs. A data-driven routing matrix (500 cells, total,
+39 differing between the flat and full-VSM arms), a bus that enforces whichever
+topology it is handed, path-shaped recursion-safe addresses, a dual clock for
+deterministic runs, Postgres persistence behind an Alembic migration, and a
+self-verifying two-agent demo. The kernel is 1,173 lines, `mypy --strict` clean,
+and imports nothing heavier than Pydantic.
 
 ## Why this and not a graph framework
 
@@ -65,15 +70,18 @@ effect.
 ```bash
 git clone https://github.com/smalik-25/viable-agents && cd viable-agents
 uv sync
-make gate          # ruff, mypy, pytest
-```
+make gate                        # ruff, mypy, pytest
+uv run viable-agents demo --verify   # two agents over the bus, self-checked
 
-Phase 1 adds `docker compose up` for Postgres and `uv run viable-agents demo`.
+docker compose up -d             # Postgres 16 on port 5433
+uv run alembic upgrade head      # build the schema
+uv run pytest                    # includes the Postgres integration tests
+```
 
 ## Roadmap
 
 - [x] Phase 0: repo bootstrap, CI, architecture stub
-- [ ] Phase 1: kernel (envelope, bus, agent base, routing matrix, persistence)
+- [x] Phase 1: kernel (envelope, bus, agent base, routing matrix, persistence)
 - [ ] Phase 2: CI event sources, three S1 worker types
 - [ ] Phase 3: S2 coordination, the anti-oscillation test
 - [ ] Phase 4: S3 control, budget allocation
